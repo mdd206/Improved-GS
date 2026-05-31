@@ -14,7 +14,7 @@ class LPIPS(nn.Module):
                         'alex' | 'squeeze' | 'vgg'. Default: 'alex'.
         version (str): the version of LPIPS. Default: 0.1.
     """
-    def __init__(self, net_type: str = 'alex', version: str = '0.1'):
+    def __init__(self, net_type: str = 'alex', version: str = '0.1') -> None:
 
         assert version in ['0.1'], 'v0.1 is only supported now'
 
@@ -27,7 +27,7 @@ class LPIPS(nn.Module):
         self.lin = LinLayers(self.net.n_channels_list)
         self.lin.load_state_dict(get_state_dict(net_type, version))
 
-    def forward(self, x: torch.Tensor, y: torch.Tensor):
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         feat_x, feat_y = self.net(x), self.net(y)
 
         diff = [(fx - fy) ** 2 for fx, fy in zip(feat_x, feat_y)]

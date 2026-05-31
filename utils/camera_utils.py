@@ -1,24 +1,58 @@
-#
-# Copyright (C) 2023, Inria
-# GRAPHDECO research group, https://team.inria.fr/graphdeco
-# All rights reserved.
-#
-# This software is free for non-commercial, research and evaluation use 
-# under the terms of the LICENSE.md file.
-#
-# For inquiries contact  george.drettakis@inria.fr
-#
+"""
+Camera loading and serialization helpers.
+
+Dataset readers produce lightweight CameraInfo records. This module opens the
+image/depth files, applies the requested resolution scale, creates Camera
+objects, and exports camera metadata for reproducibility.
+"""
+from __future__ import annotations
 
 from scene.cameras import Camera
 import numpy as np
-from utils.general_utils import PILtoTorch
+from numpy.typing import NDArray
 from utils.graphics_utils import fov2focal
+from PIL import Image
+import cv2
+from typing import Any
 
 WARNED = False
 
-def loadCam(args, id, cam_info, resolution_scale):
-    orig_w, orig_h = cam_info.image.size
+def loadCam(
+    args: Any,
+    id: int,
+    cam_info: Any,
+    resolution_scale: float,
+    is_nerf_synthetic: bool,
+    is_test_dataset: bool,
+) -> Camera:
+    """
+        Load one image/depth pair and convert a CameraInfo record into a Camera.
 
+        Resolution handling follows the original 3DGS behavior: fixed divisors,
+        automatic 1.6K downscale for very large images, or a user-provided width.
+    """
+    image = Image.open(cam_info.image_path)
+
+    if cam_info.depth_path != "":
+        try:
+            if is_nerf_synthetic:
+                invdepthmap = cv2.imread(cam_info.depth_path, -1).astype(np.float32) / 512
+            else:
+                invdepthmap = cv2.imread(cam_info.depth_path, -1).astype(np.float32) / float(2**16)
+
+        except FileNotFoundError:
+            print(f"Error: The depth file at path '{cam_info.depth_path}' was not found.")
+            raise
+        except IOError:
+            print(f"Error: Unable to open the image file '{cam_info.depth_path}'. It may be corrupted or an unsupported format.")
+            raise
+        except Exception as e:
+            print(f"An unexpected error occurred when trying to read depth at {cam_info.depth_path}: {e}")
+            raise
+    else:
+        invdepthmap = None
+        
+    orig_w, orig_h = image.size
     if args.resolution in [1, 2, 4, 8]:
         resolution = round(orig_w/(resolution_scale * args.resolution)), round(orig_h/(resolution_scale * args.resolution))
     else:  # should be a type that converts to float
@@ -34,33 +68,39 @@ def loadCam(args, id, cam_info, resolution_scale):
                 global_down = 1
         else:
             global_down = orig_w / args.resolution
+    
 
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
-    resized_image_rgb = PILtoTorch(cam_info.image, resolution)
+    return Camera(resolution, colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
+                  FoVx=cam_info.FovX, FoVy=cam_info.FovY, depth_params=cam_info.depth_params,
+                  image=image, invdepthmap=invdepthmap,
+                  image_name=cam_info.image_name, uid=id, data_device=args.data_device,
+                  train_test_exp=args.train_test_exp, is_test_dataset=is_test_dataset, is_test_view=cam_info.is_test)
 
-    gt_image = resized_image_rgb[:3, ...]
-    loaded_mask = None
-
-    if resized_image_rgb.shape[1] == 4:
-        loaded_mask = resized_image_rgb[3:4, ...]
-
-    return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
-                  FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
-                  image=gt_image, gt_alpha_mask=loaded_mask,
-                  image_name=cam_info.image_name, uid=id, data_device=args.data_device)
-
-def cameraList_from_camInfos(cam_infos, resolution_scale, args):
-    camera_list = []
+def cameraList_from_camInfos(
+    cam_infos: list[Any],
+    resolution_scale: float,
+    args: Any,
+    is_nerf_synthetic: bool,
+    is_test_dataset: bool,
+) -> list[Camera]:
+    """
+        Build Camera objects for every CameraInfo entry in a scene split.
+    """
+    camera_list: list[Camera] = []
 
     for id, c in enumerate(cam_infos):
-        camera_list.append(loadCam(args, id, c, resolution_scale))
+        camera_list.append(loadCam(args, id, c, resolution_scale, is_nerf_synthetic, is_test_dataset))
 
     return camera_list
 
-def camera_to_JSON(id, camera : Camera):
-    Rt = np.zeros((4, 4))
+def camera_to_JSON(id: int, camera: Camera) -> dict[str, Any]:
+    """
+        Convert a Camera object into the compact JSON format saved with outputs.
+    """
+    Rt: NDArray[np.float64] = np.zeros((4, 4))
     Rt[:3, :3] = camera.R.transpose()
     Rt[:3, 3] = camera.T
     Rt[3, 3] = 1.0

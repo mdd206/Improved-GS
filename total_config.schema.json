@@ -1,0 +1,35 @@
+{
+  "training_method": {
+    "description": "Open-source training method entry",
+    "enum": [
+      "3dgs",
+      "minigs",
+      "absgs",
+      "mcmc",
+      "improvedgs",
+      "gns"
+    ]
+  },
+  "optimizer_type": {
+    "description": "Dense optimizer branch",
+    "enum": [
+      "default",
+      "ours_adam"
+    ]
+  },
+  "init_type": {
+    "description": "Point-cloud initialization branch",
+    "enum": [
+      "sfm",
+      "random"
+    ]
+  },
+  "final_budget_mode": {
+    "description": "GNS final budget mode",
+    "enum": [
+      "off",
+      "num",
+      "rate"
+    ]
+  }
+}

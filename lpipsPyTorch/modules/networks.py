@@ -9,7 +9,7 @@ from torchvision import models
 from .utils import normalize_activation
 
 
-def get_network(net_type: str):
+def get_network(net_type: str) -> nn.Module:
     if net_type == 'alex':
         return AlexNet()
     elif net_type == 'squeeze':
@@ -21,7 +21,7 @@ def get_network(net_type: str):
 
 
 class LinLayers(nn.ModuleList):
-    def __init__(self, n_channels_list: Sequence[int]):
+    def __init__(self, n_channels_list: Sequence[int]) -> None:
         super(LinLayers, self).__init__([
             nn.Sequential(
                 nn.Identity(),
@@ -34,7 +34,7 @@ class LinLayers(nn.ModuleList):
 
 
 class BaseNet(nn.Module):
-    def __init__(self):
+    def __init__(self) -> None:
         super(BaseNet, self).__init__()
 
         # register buffer
@@ -43,14 +43,14 @@ class BaseNet(nn.Module):
         self.register_buffer(
             'std', torch.Tensor([.458, .448, .450])[None, :, None, None])
 
-    def set_requires_grad(self, state: bool):
+    def set_requires_grad(self, state: bool) -> None:
         for param in chain(self.parameters(), self.buffers()):
             param.requires_grad = state
 
-    def z_score(self, x: torch.Tensor):
+    def z_score(self, x: torch.Tensor) -> torch.Tensor:
         return (x - self.mean) / self.std
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
         x = self.z_score(x)
 
         output = []
@@ -64,7 +64,7 @@ class BaseNet(nn.Module):
 
 
 class SqueezeNet(BaseNet):
-    def __init__(self):
+    def __init__(self) -> None:
         super(SqueezeNet, self).__init__()
 
         self.layers = models.squeezenet1_1(True).features
@@ -75,7 +75,7 @@ class SqueezeNet(BaseNet):
 
 
 class AlexNet(BaseNet):
-    def __init__(self):
+    def __init__(self) -> None:
         super(AlexNet, self).__init__()
 
         self.layers = models.alexnet(True).features
@@ -86,7 +86,7 @@ class AlexNet(BaseNet):
 
 
 class VGG16(BaseNet):
-    def __init__(self):
+    def __init__(self) -> None:
         super(VGG16, self).__init__()
 
         self.layers = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1).features

@@ -1,0 +1,141 @@
+{
+  "runner_config": {
+    "data_root": "../data",
+    "output_root": "output",
+    "repeat": 1,
+    "python_executable": "python",
+    "gpu_auto_select": true,
+    "gpu_id": null,
+    "stop_on_error": true,
+    "run_postprocess": true,
+    "select_best_repeat_by_psnr": false
+  },
+  "train_config": {
+    "loading": {
+      "sh_degree": 3,
+      "source_path": null,
+      "model_path": null,
+      "images": "images",
+      "depths": "",
+      "resolution": -1,
+      "white_background": false,
+      "init_type": "sfm",
+      "train_test_exp": false,
+      "data_device": "cuda",
+      "eval": true
+    },
+    "pipeline": {
+      "debug": false,
+      "antialiasing": false,
+      "depth_ratio": 0.0
+    },
+    "optimization": {
+      "base": {
+        "iterations": 30000,
+        "position_lr_init": 0.00004,
+        "position_lr_final": 0.000002,
+        "position_lr_delay_mult": 0.01,
+        "position_lr_max_steps": 30000,
+        "lr_rate": 1.0,
+        "feature_lr": 0.0025,
+        "opacity_lr": 0.025,
+        "initial_opacity": 0.1,
+        "scaling_lr": 0.005,
+        "rotation_lr": 0.001,
+        "exposure_lr_init": 0.01,
+        "exposure_lr_final": 0.001,
+        "exposure_lr_delay_steps": 0,
+        "exposure_lr_delay_mult": 0.0,
+        "percent_dense": 0.01,
+        "lambda_dssim": 0.2,
+        "densification_interval": 100,
+        "opacity_reset_interval": 3000,
+        "densify_from_iter": 500,
+        "densify_until_iter": 15000,
+        "densify_grad_threshold": 0.0002,
+        "min_opacity": 0.005,
+        "depth_l1_weight_init": 1.0,
+        "depth_l1_weight_final": 0.01,
+        "random_background": false,
+        "optimizer_type": "default"
+      },
+      "training_method": {
+        "training_method": "3dgs",
+        "use_las": true,
+        "use_rap": true,
+        "use_eas": true,
+        "use_mu": true
+      },
+      "minigs": {
+        "minigs_imp_metric": "outdoor",
+        "minigs_num_depth": 3500000,
+        "minigs_num_max": 4500000,
+        "minigs_reinit_interval": 5000,
+        "minigs_blur_screen_coverage_divisor": 5000.0
+      },
+      "improvedgs": {
+        "edge_sample_cams": 10,
+        "improvedgs_reset_min_opacity": 0.05,
+        "split_distance": 0.45,
+        "opacity_reduction": 0.6,
+        "budget": 3000000,
+        "budget_multiplier": 3.0,
+        "budget_warmup_until_offset": 500,
+        "rap_prune_ratio": 0.2,
+        "rap_prune_offset": 300,
+        "rap_rounds": 2,
+        "mu_start_iter": 20000,
+        "mu_interval": 5,
+        "mu_second_start_iter": 24000,
+        "mu_second_interval": 20
+      },
+      "mcmc": {
+        "noise_lr": 500000.0,
+        "mcmc_noise_opacity_sharpness": 100.0,
+        "mcmc_scale_reg": 0.01,
+        "mcmc_opacity_reg": 0.01
+      },
+      "gns": {
+        "gns_opacity_reg": 0.002,
+        "gns_opacity_lr_scale": 5.0
+      },
+      "reg_prune": {
+        "final_budget": 600000,
+        "final_budget_mode": "off",
+        "final_rate": 0.2,
+        "reg_prune_from_iter": 15000,
+        "reg_prune_until_iter": 20000
+      }
+    },
+    "runtime": {
+      "debug_from": -1,
+      "detect_anomaly": false,
+      "quiet": false,
+      "progress_bar_width": 90,
+      "checkpoint_iterations": [],
+      "start_checkpoint_dir": "",
+      "start_checkpoint_file": "",
+      "report_lpips_test": true,
+      "report_lpips_train": false
+    }
+  },
+  "postprocess_config": {
+    "iteration": -1,
+    "include_train": true,
+    "skip_test": false,
+    "no_save_test_images": false,
+    "no_save_train_images": false,
+    "fps_warmup_rounds": 20,
+    "fps_measure_rounds": 20,
+    "quiet": false
+  },
+  "scene_config": {
+    "name": "garden",
+    "output_suffix": "",
+    "train_args": {},
+    "checkpoint_args": {
+      "checkpoint_iterations": []
+    },
+    "postprocess_args": {}
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "data_root": "../data",
+  "repeat": 3,
+  "python_executable": "python",
+  "gpu_auto_select": true,
+  "gpu_id": null,
+  "stop_on_error": true,
+  "run_postprocess": true,
+  "select_best_repeat_by_psnr": true,
+
+  "postprocess_args": {
+    "include_train": true,
+    "skip_test": false,
+    "no_save_test_images": false,
+    "no_save_train_images": true,
+    "fps_warmup_rounds": 10,
+    "fps_measure_rounds": 10
+  },
+
+  "train_args": {
+    "progress_bar_width": 100,
+    "report_lpips_test": true,
+    "report_lpips_train": false,
+
+    "training_method": "mcmc",
+    "densify_until_iter": 25000,
+    "position_lr_init": 0.00016,
+    "opacity_lr": 0.05,
+    "initial_opacity": 0.5
+  },
+
+  "output_root": "output/mcmc",
+  "output_suffix": "",
+
+  "scenes": [
+    {
+      "name": "bicycle",
+      "train_args": {
+        "budget": 5900000
+      }
+    },
+    {
+      "name": "flowers",
+      "train_args": {
+        "budget": 3600000
+      }
+    },
+    {
+      "name": "garden",
+      "train_args": {
+        "budget": 5200000
+      }
+    },
+    {
+      "name": "stump",
+      "train_args": {
+        "budget": 4750000
+      }
+    },
+    {
+      "name": "treehill",
+      "train_args": {
+        "budget": 3700000
+      }
+    },
+    {
+      "name": "bonsai",
+      "train_args": {
+        "budget": 1300000
+      }
+    },
+    {
+      "name": "counter",
+      "train_args": {
+        "budget": 1200000
+      }
+    },
+    {
+      "name": "kitchen",
+      "train_args": {
+        "budget": 1800000
+      }
+    },
+    {
+      "name": "room",
+      "train_args": {
+        "budget": 1500000
+      }
+    },
+    {
+      "name": "playroom",
+      "train_args": {
+        "budget": 2500000
+      }
+    },
+    {
+      "name": "drjohnson",
+      "train_args": {
+        "budget": 3400000
+      }
+    },
+    {
+      "name": "train",
+      "train_args": {
+        "budget": 1100000
+      }
+    },
+    {
+      "name": "truck",
+      "train_args": {
+        "budget": 2600000
+      }
+    }
+  ]
+}
