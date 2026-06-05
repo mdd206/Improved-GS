@@ -198,11 +198,11 @@ output_root/
 | `test/ours_<iter>/per_view.json` | 每张图的 PSNR、SSIM、LPIPS |
 | `<config_name>_result_*_total.csv` | 多场景批量汇总结果 |
 
-## 未来计划
+## 复现结果
 
-- 后续会陆续提供各种数据集的 `<config_name>_result_*_total.csv`，方便大家对齐和复现结果。
-- 如果发现 bug，也会持续更新修复。
-- 如果发现代码的任何问题均可在 `issue` 中提出。
+- `results/` 目录中给出了各个 config 的作者复现数据。
+- 这些结果在 NVIDIA RTX 4090 上复现得到。
+- 如果发现代码问题，或有不理解的实现细节，欢迎在 issue 中提出。
 
 ## 致谢
 

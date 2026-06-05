@@ -198,11 +198,11 @@ Main files:
 | `test/ours_<iter>/per_view.json` | Per-image PSNR, SSIM, and LPIPS |
 | `<config_name>_result_*_total.csv` | Batch aggregation results for multiple scenes |
 
-## Roadmap
+## Reproduction Results
 
-- We will gradually provide `<config_name>_result_*_total.csv` files for various datasets to make result alignment and reproduction easier.
-- Bugs will continue to be fixed as they are discovered.
-- If you find any problem in the code, please open an issue.
+- The `results/` directory provides the authors' reproduced results for each config.
+- These results were reproduced on an NVIDIA RTX 4090.
+- If you find any code issue or have questions about the implementation, please open an issue.
 
 ## Acknowledgements
 

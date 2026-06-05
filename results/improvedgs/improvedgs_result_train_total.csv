@@ -1,0 +1,14 @@
+config_name,split,iteration,scene_name,PSNR,SSIM,LPIPS,FPS,NUM,Training_time
+improvedgs,train,30000,bicycle,27.569,0.89359,0.12690,400.7,3000000,7.71
+improvedgs,train,30000,flowers,25.273,0.82076,0.19721,592.1,1500000,5.85
+improvedgs,train,30000,garden,30.714,0.92672,0.06970,404.5,3000000,8.15
+improvedgs,train,30000,stump,33.567,0.94396,0.09243,455.7,3000000,7.37
+improvedgs,train,30000,treehill,25.305,0.82867,0.20820,631.3,1500000,5.44
+improvedgs,train,30000,bonsai,33.998,0.95636,0.18329,646.2,1000000,6.17
+improvedgs,train,30000,counter,31.395,0.93732,0.16245,599.9,920317,6.58
+improvedgs,train,30000,kitchen,33.931,0.94961,0.10423,631.4,950175,6.19
+improvedgs,train,30000,room,35.450,0.94909,0.17712,660.3,1000000,5.99
+improvedgs,train,30000,playroom,38.585,0.95946,0.19356,902.5,1000000,4.98
+improvedgs,train,30000,drjohnson,38.021,0.96207,0.17403,729.9,1500000,5.96
+improvedgs,train,30000,train,27.133,0.90520,0.13722,647.2,1000000,4.25
+improvedgs,train,30000,truck,28.788,0.92846,0.10878,670.2,1500000,4.74
