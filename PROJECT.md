@@ -62,6 +62,7 @@ A runnable config needs a top-level `scenes` list. Minimal example:
 | `gpu_id` | Specific GPU ID; when `null`, GPU selection is controlled by the auto-selection logic |
 | `stop_on_error` | Whether to stop the whole config when one scene fails |
 | `run_postprocess` | Whether to run post-processing after training |
+| `postprocess_script` | Post-processing entry point; defaults to `postprocess.py`, use `vai_render.py` for VAI scenes |
 | `select_best_repeat_by_psnr` | Whether to keep the best repeat by PSNR when running multiple repeats |
 | `output_suffix` | Suffix for output directory names |
 

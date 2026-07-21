@@ -92,7 +92,12 @@ def run_single_config(config_path: str, dry_run: bool, scene_filter: set[str], r
                         continue
 
                     postprocess_payload = build_postprocess_payload(config, scene, data_dir, output_dir)
-                    postprocess_command = build_python_command(python_executable, "postprocess.py", postprocess_payload)
+                    postprocess_script = str(config.get("postprocess_script", "postprocess.py"))
+                    postprocess_command = build_python_command(
+                        python_executable,
+                        postprocess_script,
+                        postprocess_payload,
+                    )
                     return_code = run_command(postprocess_command, gpu_id=selected_gpu, dry_run=dry_run)
                     if return_code != 0:
                         if stop_on_error:

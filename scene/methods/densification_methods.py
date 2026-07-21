@@ -60,4 +60,14 @@ def prepare_edge_maps(train_cameras: list[Any], opt: Any) -> list[torch.Tensor]:
         Precompute one edge map per training camera for later scoring calls.
     """
     del opt
-    return [compute_edge_map(camera.original_image) for camera in train_cameras]
+    edge_maps = []
+    for camera in train_cameras:
+        edge_map = compute_edge_map(camera.original_image)
+        alpha_mask = getattr(camera, "alpha_mask", None)
+        if alpha_mask is not None:
+            # Co mask vao trong mot pixel de EAS bo qua vien den do undistort tao ra.
+            invalid = (alpha_mask[:1].to(edge_map.device) < 0.5).to(torch.float32)
+            invalid_border = F.max_pool2d(invalid.unsqueeze(0), kernel_size=3, stride=1, padding=1)
+            edge_map = edge_map * (1.0 - invalid_border.squeeze(0).squeeze(0))
+        edge_maps.append(edge_map)
+    return edge_maps

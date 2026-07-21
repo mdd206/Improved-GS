@@ -173,8 +173,10 @@ def build_postprocess_payload(config: dict[str, Any], scene: dict[str, Any], dat
     for key in (
         "sh_degree",
         "images",
+        "depths",
         "resolution",
         "white_background",
+        "init_type",
         "data_device",
         "eval",
         "train_test_exp",

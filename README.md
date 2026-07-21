@@ -25,6 +25,10 @@ This repository is built from the latest 3DGS. Compared with the version built f
 
 For detailed project documentation, see: [Detailed project usage guide](PROJECT.md)
 
+For the Viettel AI Race `SIMPLE_RADIAL` data pipeline, including preprocessing,
+CSV-pose rendering, public-set evaluation, and submission packaging, see:
+[VAI pipeline guide](VAI.md).
+
 ## Installation and Environment Setup
 
 Recommended environment (the authors' development version):

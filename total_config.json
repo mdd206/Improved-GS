@@ -8,6 +8,7 @@
     "gpu_id": null,
     "stop_on_error": true,
     "run_postprocess": true,
+    "postprocess_script": "postprocess.py",
     "select_best_repeat_by_psnr": false
   },
   "train_config": {

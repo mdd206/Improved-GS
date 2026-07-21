@@ -1,0 +1,46 @@
+{
+  "data_root": "/kaggle/working/vai_cleaned",
+  "output_root": "/kaggle/working/vai_models",
+  "repeat": 1,
+  "python_executable": "python",
+  "gpu_auto_select": false,
+  "gpu_id": 0,
+  "stop_on_error": true,
+  "run_postprocess": true,
+  "postprocess_script": "vai_render.py",
+  "select_best_repeat_by_psnr": false,
+
+  "train_args": {
+    "training_method": "improvedgs",
+    "iterations": 30000,
+    "eval": false,
+    "resolution": -1,
+    "data_device": "cpu",
+    "budget": 3000000,
+    "progress_bar_width": 100,
+    "report_lpips_test": false,
+    "report_lpips_train": false
+  },
+
+  "postprocess_args": {
+    "output_root": "/kaggle/working/vai_renders",
+    "eval_root": "/kaggle/working/vai_eval",
+    "output_extension": "csv",
+    "redistort_interpolation": "bicubic",
+    "sharpen_amount": 1.0,
+    "sharpen_sigma": 0.60,
+    "jpeg_quality": 95,
+    "jpeg_subsampling": 2,
+    "evaluate": true,
+    "require_gt": true,
+    "overwrite": true,
+    "psnr_max": 40.0,
+    "lpips_net": "alex"
+  },
+
+  "scenes": [
+    {
+      "name": "HCM0204"
+    }
+  ]
+}
