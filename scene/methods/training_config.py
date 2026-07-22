@@ -32,6 +32,10 @@ def build_training_method_config(opt: Any) -> dict[str, Any]:
     if method == "mcmc" and int(getattr(opt, "budget", 0)) <= 0:
         raise ValueError("mcmc requires budget > 0.")
 
+    soft_density_scale = _read_bool(opt, "soft_density_scale", False)
+    if soft_density_scale and method not in ("improvedgs", "gns"):
+        raise ValueError("soft_density_scale is supported only with improvedgs or gns.")
+
     if method in ("improvedgs", "gns"):
         use_las = _read_bool(opt, "use_las", True)
         use_eas = _read_bool(opt, "use_eas", True)
@@ -49,4 +53,5 @@ def build_training_method_config(opt: Any) -> dict[str, Any]:
         "use_eas": use_eas,
         "use_mu": use_mu,
         "use_rap": use_rap,
+        "soft_density_scale": soft_density_scale,
     }

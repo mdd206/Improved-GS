@@ -36,6 +36,12 @@ from utils.coarse_to_fine import (
     resolve_training_resolution_scale,
     validate_coarse_to_fine_schedule,
 )
+from utils.density_scale import (
+    compute_soft_density_scale_delta,
+    resolve_soft_density_scale_window,
+    should_run_soft_density_scale,
+    validate_soft_density_scale_options,
+)
 
 
 _EDGE_MODULE_SPEC = importlib.util.spec_from_file_location(
@@ -47,6 +53,16 @@ if _EDGE_MODULE_SPEC is None or _EDGE_MODULE_SPEC.loader is None:
 _EDGE_MODULE = importlib.util.module_from_spec(_EDGE_MODULE_SPEC)
 _EDGE_MODULE_SPEC.loader.exec_module(_EDGE_MODULE)
 prepare_edge_maps = _EDGE_MODULE.prepare_edge_maps
+
+_DENSITY_SCALE_MODULE_SPEC = importlib.util.spec_from_file_location(
+    "vai_test_density_scale_methods",
+    Path(__file__).resolve().parents[1] / "scene" / "methods" / "density_scale_methods.py",
+)
+if _DENSITY_SCALE_MODULE_SPEC is None or _DENSITY_SCALE_MODULE_SPEC.loader is None:
+    raise RuntimeError("Khong nap duoc density_scale_methods.py")
+_DENSITY_SCALE_MODULE = importlib.util.module_from_spec(_DENSITY_SCALE_MODULE_SPEC)
+_DENSITY_SCALE_MODULE_SPEC.loader.exec_module(_DENSITY_SCALE_MODULE)
+run_soft_density_scale_update = _DENSITY_SCALE_MODULE.run_soft_density_scale_update
 
 
 POSE_COLUMNS = [
@@ -120,6 +136,109 @@ class CoarseToFineScheduleTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             validate_coarse_to_fine_schedule(opt)
+
+
+class SoftDensityScaleTests(unittest.TestCase):
+    def make_options(self, **overrides: object) -> SimpleNamespace:
+        values = {
+            "soft_density_scale": True,
+            "soft_ds_start_iter": -1,
+            "soft_ds_until_iter": -1,
+            "soft_ds_interval": 500,
+            "soft_ds_strength": 0.1,
+            "soft_ds_max_scale_ratio": 2.0,
+            "soft_ds_target_multiplier": 1.0,
+            "soft_ds_max_points": 500_000,
+            "soft_ds_min_spacing": 1e-7,
+            "soft_ds_seed": 34_007,
+            "coarse_to_fine": True,
+            "coarse_to_fine_full_iter": 5_000,
+            "densify_from_iter": 500,
+            "densify_until_iter": 15_000,
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_default_window_starts_at_full_resolution_and_ends_with_densification(self) -> None:
+        opt = self.make_options()
+        self.assertEqual(resolve_soft_density_scale_window(opt), (5_000, 15_000))
+        self.assertFalse(should_run_soft_density_scale(opt, 4_999))
+        self.assertTrue(should_run_soft_density_scale(opt, 5_000))
+        self.assertTrue(should_run_soft_density_scale(opt, 5_500))
+        self.assertFalse(should_run_soft_density_scale(opt, 5_501))
+        self.assertTrue(should_run_soft_density_scale(opt, 15_000))
+        self.assertFalse(should_run_soft_density_scale(opt, 15_001))
+
+    def test_validation_rejects_unbounded_strength_and_tiny_sample(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_soft_density_scale_options(self.make_options(soft_ds_strength=1.1))
+        with self.assertRaises(ValueError):
+            validate_soft_density_scale_options(self.make_options(soft_ds_max_points=3))
+        with self.assertRaises(ValueError):
+            validate_soft_density_scale_options(self.make_options(soft_ds_max_scale_ratio=1.0))
+
+    def test_uniform_density_keeps_scale_unchanged(self) -> None:
+        log_scale = torch.zeros(5, dtype=torch.float32)
+        spacing = torch.full((5,), 2.0, dtype=torch.float32)
+        delta, statistics = compute_soft_density_scale_delta(log_scale, spacing, 0.1, 2.0)
+        torch.testing.assert_close(delta, torch.zeros_like(delta))
+        self.assertAlmostEqual(statistics["median_scale_spacing_ratio"], 0.5)
+
+    def test_sparse_point_grows_softly_and_correction_is_bounded(self) -> None:
+        log_scale = torch.zeros(3, dtype=torch.float32)
+        spacing = torch.tensor([1.0, 1.0, 8.0], dtype=torch.float32)
+        delta, statistics = compute_soft_density_scale_delta(log_scale, spacing, 0.25, 2.0)
+        expected = 0.25 * np.log(2.0)
+        self.assertAlmostEqual(float(delta[0]), 0.0)
+        self.assertAlmostEqual(float(delta[1]), 0.0)
+        self.assertAlmostEqual(float(delta[2]), expected, places=6)
+        self.assertAlmostEqual(statistics["clipped_fraction"], 1.0 / 3.0, places=6)
+
+    def test_scalar_delta_preserves_las_axis_ratios(self) -> None:
+        log_axes = torch.log(torch.tensor([[1.0, 2.0, 4.0]], dtype=torch.float32))
+        delta = torch.tensor([0.2], dtype=torch.float32)
+        old_ratio = torch.exp(log_axes[:, 1:] - log_axes[:, :1])
+        new_ratio = torch.exp((log_axes + delta[:, None])[:, 1:] - (log_axes + delta[:, None])[:, :1])
+        torch.testing.assert_close(new_ratio, old_ratio)
+
+    def test_runtime_update_uses_spacing_kernel_and_preserves_axis_ratios(self) -> None:
+        class FakeGaussians:
+            def __init__(self) -> None:
+                self._xyz = torch.arange(12, dtype=torch.float32).reshape(4, 3)
+                base_axes = torch.log(torch.tensor([1.0, 2.0, 4.0], dtype=torch.float32))
+                self._scaling = torch.nn.Parameter(base_axes.repeat(4, 1))
+
+            @property
+            def get_xyz(self) -> torch.Tensor:
+                return self._xyz
+
+        opt = self.make_options(soft_ds_max_points=0)
+        context = SimpleNamespace(
+            opt=opt,
+            method_config={"soft_density_scale": True},
+            runtime_state={},
+        )
+        gaussians = FakeGaussians()
+        original_ratios = torch.exp(gaussians._scaling[:, 1:] - gaussians._scaling[:, :1]).detach().clone()
+
+        def fake_squared_spacing(points: torch.Tensor) -> torch.Tensor:
+            self.assertEqual(points.shape, (4, 3))
+            return torch.tensor([1.0, 1.0, 1.0, 64.0], dtype=torch.float32)
+
+        with patch("builtins.print"):
+            result = run_soft_density_scale_update(
+                context,
+                gaussians,
+                iteration=5_000,
+                distance_function=fake_squared_spacing,
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["sampled_gaussians"], 4)
+        self.assertEqual(context.runtime_state["soft_density_scale_last_update"], result)
+        updated_ratios = torch.exp(gaussians._scaling[:, 1:] - gaussians._scaling[:, :1]).detach()
+        torch.testing.assert_close(updated_ratios, original_ratios)
+        self.assertGreater(float(gaussians._scaling[3].mean()), float(gaussians._scaling[0].mean()))
 
 
 class ColmapIoTests(unittest.TestCase):
@@ -366,6 +485,12 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertTrue(train_config["coarse_to_fine"])
         self.assertEqual(train_config["coarse_to_fine_middle_iter"], 2000)
         self.assertEqual(train_config["coarse_to_fine_full_iter"], 5000)
+        self.assertTrue(train_config["soft_density_scale"])
+        self.assertEqual(train_config["soft_ds_interval"], 500)
+        self.assertEqual(train_config["soft_ds_strength"], 0.1)
+        self.assertEqual(train_config["soft_ds_max_scale_ratio"], 2.0)
+        self.assertEqual(train_config["soft_ds_max_points"], 500000)
+        self.assertEqual(train_config["soft_ds_seed"], 34007)
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -373,7 +498,7 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["jpeg_subsampling"], 2)
         self.assertEqual(render_config["output_extension"], "csv")
         notebook_source = "\n".join(code_cells)
-        self.assertIn("REPO_BRANCH = 'agent/coarse-to-fine'", notebook_source)
+        self.assertIn("REPO_BRANCH = 'agent/soft-density-scale'", notebook_source)
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 

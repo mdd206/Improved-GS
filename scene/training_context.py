@@ -14,6 +14,7 @@ from scene.gaussian_model import GaussianModel as GaussianModel3DGS
 from scene.methods.densification_methods import prepare_edge_maps
 from scene.methods.training_config import build_training_method_config
 from utils.coarse_to_fine import resolve_training_resolution_scale
+from utils.density_scale import validate_soft_density_scale_options
 
 
 class RuntimeState(TypedDict, total=False):
@@ -42,6 +43,7 @@ class RuntimeState(TypedDict, total=False):
     minigs_background: Optional[torch.Tensor]
     train_cameras: list[Any]
     training_resolution_scale: float
+    soft_density_scale_last_update: Optional[dict[str, float | int]]
 
 
 @dataclass(slots=True)
@@ -97,6 +99,7 @@ def initialize_runtime_state(
         "minigs_background": None,
         "train_cameras": train_cameras,
         "training_resolution_scale": training_resolution_scale,
+        "soft_density_scale_last_update": None,
     }
     if method in ("improvedgs", "gns"):
         train_cameras = runtime_state["train_cameras"]
@@ -137,6 +140,7 @@ def build_training_context(dataset: Any, opt: Any, pipe: Any, runtime_args: Any)
         modules can read both normal options and resolved method switches from
         the same object.
     """
+    validate_soft_density_scale_options(opt)
     method_config = build_training_method_config(opt)
 
     # Store resolved method settings on opt so later stage calls do not repeat parsing.

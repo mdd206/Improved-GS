@@ -65,6 +65,7 @@ Config mac dinh trong notebook da dat:
 
 - `training_method=improvedgs`.
 - `coarse_to_fine=true`: train 1/4 resolution den iteration 2.000, 1/2 den 5.000, sau do dung full resolution.
+- `soft_density_scale=true`: tu khi vao full resolution den het densification, moi 500 iteration dieu chinh nhe absolute scale theo khoang cach Gaussian cuc bo. Update giu nguyen ty le ba truc cua LAS, chi lay toi da 500.000 Gaussian moi dot de phu hop GPU Kaggle.
 - `eval=false` de dung toan bo 240 anh train, khong LLFF-hold anh.
 - `data_device=cpu` de 240 anh va edge map khong chiem bo nho GPU Kaggle.
 - `postprocess_script=vai_render.py`.
@@ -148,3 +149,8 @@ De thay doi iterations, budget Gaussian, duong dan output, tham so sharpen, JPEG
 evaluation hoac cac train/render argument khac, chi sua cell `VAI_CONFIG` o dau
 notebook. Co the them argument moi vao `train_args` hoac `postprocess_args` ngay trong
 cell nay ma khong can sua file Python hay JSON trong repository.
+
+Tham so soft density--scale mac dinh cua notebook la `soft_ds_interval=500`,
+`soft_ds_strength=0.1`, `soft_ds_max_scale_ratio=2.0` va
+`soft_ds_max_points=500000`. Dat `soft_density_scale=false` de quay lai dung
+ImprovedGS + coarse-to-fine ma khong thay doi cac tham so khac.

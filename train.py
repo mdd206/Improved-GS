@@ -18,6 +18,7 @@ from scene.methods.initialization_3dgs import build_gaussian_model_3dgs
 from scene.methods.optimization_methods import run_3dgs_optimization_method
 from scene.methods.pruning_methods import run_3dgs_pruning_method
 from scene.methods.densification_stage import run_3dgs_densification_method
+from scene.methods.density_scale_methods import run_soft_density_scale_update
 from scene.training_loop import (
     run_3dgs_parameter_update_method,
     run_log_and_save_stage,
@@ -134,6 +135,9 @@ def training(dataset: GroupParams, opt: GroupParams, pipe: GroupParams, runtime_
                 run_3dgs_densification_method(training_context, gaussians, iteration, render_state)
                 # Remove low-importance Gaussians after densification so the model stays within budget.
                 run_3dgs_pruning_method(training_context, gaussians, iteration)
+                # Apply the optional FDS-inspired scalar correction only after
+                # all split and prune operations have finalized this structure.
+                run_soft_density_scale_update(training_context, gaussians, iteration)
     finally:
         progress_bar.close()
 

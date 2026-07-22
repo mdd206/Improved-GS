@@ -20,6 +20,7 @@ This project is intended for researchers and developers who are new to 3D Gaussi
 | Method comparison | Built-in support for `3dgs`, `absgs`, `minigs`, `mcmc`, and `improvedgs` |
 | Lightweight experiments | Provides the `gns` pruning mode for lightweight training and pruning experiments |
 | Daily reconstruction | Supports training, rendering, PSNR/SSIM/LPIPS/FPS evaluation, and batch aggregation; includes acceleration techniques such as SpeedySplat's accurate half bounding box and a custom CUDA_Adam |
+| VAI density-scale experiment | Supports an optional bounded, FDS-inspired density--scale correction that preserves LAS anisotropy and aligns its default schedule with coarse-to-fine training |
 
 This repository is built from the latest 3DGS. Compared with the version built from TamingGS in August 2025, the current version has been reorganized based on the latest changes from the original 3DGS codebase, so it supports Mip-Splatting, depth constraints, exposure learning, and other features. The current version also adds multiple practical changes for training acceleration and batch reproduction. [GNS](https://xiaobin2001.github.io/GNS-web/) is our team's work on lightweight 3DGS. The method is simple and effective, and it has also been added to this codebase so users can reduce scene storage cost during daily training and testing.
 

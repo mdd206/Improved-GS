@@ -208,6 +208,23 @@ class CoarseToFineParams(ParamGroup):
         super().__init__(parser, "Coarse-to-Fine Parameters")
 
 
+class SoftDensityScaleParams(ParamGroup):
+    """Soft FDS-inspired density--scale consistency settings."""
+    def __init__(self, parser: ArgumentParser) -> None:
+        self.soft_density_scale = False  # Enable bounded density--scale corrections
+        self.soft_ds_start_iter = -1  # -1 aligns the start with C2F full resolution
+        self.soft_ds_until_iter = -1  # -1 follows densify_until_iter
+        self.soft_ds_interval = 500  # Iterations between local-density updates
+        self.soft_ds_strength = 0.1  # Fraction of the bounded log-scale correction
+        self.soft_ds_max_scale_ratio = 2.0  # Maximum target/current ratio per update
+        self.soft_ds_target_multiplier = 1.0  # Optional global target-scale multiplier
+        self.soft_ds_max_points = 500_000  # Sample cap; 0 uses every Gaussian
+        self.soft_ds_min_spacing = 1e-7  # Numerical floor for neighbour spacing
+        self.soft_ds_seed = 34_007  # Dedicated sampling seed; does not perturb training RNG
+        self._fields = {key: value for key, value in vars(self).items() if not key.startswith("__")}
+        super().__init__(parser, "Soft Density-Scale Parameters")
+
+
 class MiniGSParams(ParamGroup):
     """
         MiniGS-specific limits and periodic reinitialization settings.
@@ -292,6 +309,7 @@ class OptimizationParams:
             OptimizationBaseParams(parser),
             TrainingMethodParams(parser),
             CoarseToFineParams(parser),
+            SoftDensityScaleParams(parser),
             MiniGSParams(parser),
             ImprovedGSParams(parser),
             MCMCParams(parser),
