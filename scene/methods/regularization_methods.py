@@ -12,6 +12,10 @@ import torch
 from scene.gaussian_model import GaussianModel as GaussianModel3DGS
 from scene.methods.pruning_methods import resolve_regularized_prune_target_budget
 from scene.training_context import TrainingContext
+from utils.view_support_regularization import (
+    compute_view_support_penalties,
+    should_apply_view_support_regularization,
+)
 
 
 def apply_mcmc_regularization(
@@ -81,6 +85,60 @@ def apply_gns_opacity_regularization(
     return loss + float(opt.gns_opacity_reg) * compute_gns_pre_l1_regularization(gaussians)
 
 
+def apply_view_support_regularization(
+    context: TrainingContext,
+    gaussians: GaussianModel3DGS,
+    iteration: int,
+    loss: torch.Tensor,
+) -> torch.Tensor:
+    """Giam opacity va scale lon cua Gaussian co it view support."""
+    if not bool(context.method_config.get("use_view_support_regularization", False)):
+        return loss
+
+    opt = context.opt
+    densify_from = int(opt.densify_from_iter)
+    densify_until = int(opt.densify_until_iter)
+    if not should_apply_view_support_regularization(
+        iteration,
+        densify_from,
+        densify_until,
+        int(opt.densification_interval),
+    ):
+        return loss
+    if gaussians.denom.numel() == 0:
+        return loss
+    if float(gaussians.denom.detach().max().item()) <= 0.0:
+        return loss
+
+    scene = context.scene
+    if scene is None:
+        raise ValueError("Training context is missing scene for view-support regularization.")
+    opacity_penalty, scale_penalty, support_weights = compute_view_support_penalties(
+        gaussians.get_opacity,
+        gaussians.get_scaling,
+        gaussians.denom,
+        float(opt.view_support_min_views),
+        float(opt.view_support_min_ratio),
+        float(scene.cameras_extent),
+        float(opt.view_support_max_scale_ratio),
+    )
+    if int(iteration) % 1_000 == 0:
+        unsupported_ratio = float((support_weights > 0).to(torch.float32).mean().item())
+        print(
+            "View-support regularization: iteration={} unsupported={:.2%} opacity={:.6f} scale={:.6f}".format(
+                iteration,
+                unsupported_ratio,
+                float(opacity_penalty.detach().item()),
+                float(scale_penalty.detach().item()),
+            )
+        )
+    return (
+        loss
+        + float(opt.view_support_opacity_reg) * opacity_penalty
+        + float(opt.view_support_scale_reg) * scale_penalty
+    )
+
+
 def apply_regularization_method(
     context: TrainingContext,
     gaussians: GaussianModel3DGS,
@@ -95,4 +153,6 @@ def apply_regularization_method(
         return apply_mcmc_regularization(context, gaussians, loss)
     if method == "gns":
         return apply_gns_opacity_regularization(context, gaussians, iteration, loss)
+    if method == "improvedgs":
+        return apply_view_support_regularization(context, gaussians, iteration, loss)
     return loss

@@ -171,6 +171,23 @@ Coarse-to-fine training is optional and can be combined with ImprovedGS without 
 
 The fixed resolution sequence is `1/4 -> 1/2 -> full`. The two iteration parameters select when training enters `1/2` and full resolution.
 
+View-support regularization can reduce large, opaque Gaussians that are observed by very few sampled cameras:
+
+```json
+{
+  "train_args": {
+    "view_support_regularization": true,
+    "view_support_min_views": 2.0,
+    "view_support_min_ratio": 0.02,
+    "view_support_opacity_reg": 0.002,
+    "view_support_scale_reg": 0.01,
+    "view_support_max_scale_ratio": 0.01
+  }
+}
+```
+
+The regularizer runs at the end of each densification interval. It uses the existing visibility accumulator, so clone, split, and prune operations do not need separate support tensors.
+
 Common parameters:
 
 | Parameter | Description |

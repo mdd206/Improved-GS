@@ -72,6 +72,14 @@
         "coarse_to_fine_middle_iter": 2000,
         "coarse_to_fine_full_iter": 5000
       },
+      "view_support_regularization": {
+        "view_support_regularization": false,
+        "view_support_min_views": 2.0,
+        "view_support_min_ratio": 0.02,
+        "view_support_opacity_reg": 0.002,
+        "view_support_scale_reg": 0.01,
+        "view_support_max_scale_ratio": 0.01
+      },
       "minigs": {
         "minigs_imp_metric": "outdoor",
         "minigs_num_depth": 3500000,

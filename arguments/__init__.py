@@ -208,6 +208,21 @@ class CoarseToFineParams(ParamGroup):
         super().__init__(parser, "Coarse-to-Fine Parameters")
 
 
+class ViewSupportParams(ParamGroup):
+    """
+        Regularization opacity va scale cho Gaussian duoc it camera ho tro.
+    """
+    def __init__(self, parser: ArgumentParser) -> None:
+        self.view_support_regularization = False  # Bat regularization theo view support
+        self.view_support_min_views = 2.0  # So view toi thieu trong mot cua so densification
+        self.view_support_min_ratio = 0.02  # Ty le support toi thieu so voi Gaussian tot nhat
+        self.view_support_opacity_reg = 0.002  # Trong so opacity penalty
+        self.view_support_scale_reg = 0.01  # Trong so scale penalty
+        self.view_support_max_scale_ratio = 0.01  # Scale lon nhat theo scene extent khong bi phat
+        self._fields = {key: value for key, value in vars(self).items() if not key.startswith("__")}
+        super().__init__(parser, "View-Support Regularization Parameters")
+
+
 class MiniGSParams(ParamGroup):
     """
         MiniGS-specific limits and periodic reinitialization settings.
@@ -292,6 +307,7 @@ class OptimizationParams:
             OptimizationBaseParams(parser),
             TrainingMethodParams(parser),
             CoarseToFineParams(parser),
+            ViewSupportParams(parser),
             MiniGSParams(parser),
             ImprovedGSParams(parser),
             MCMCParams(parser),

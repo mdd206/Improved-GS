@@ -43,10 +43,27 @@ def build_training_method_config(opt: Any) -> dict[str, Any]:
         use_mu = False
         use_rap = False
 
+    use_view_support_regularization = _read_bool(opt, "view_support_regularization", False)
+    if use_view_support_regularization and method != "improvedgs":
+        raise ValueError("view_support_regularization currently supports only improvedgs.")
+    if use_view_support_regularization:
+        if float(getattr(opt, "view_support_min_views", 0.0)) <= 0.0:
+            raise ValueError("view_support_min_views must be greater than 0.")
+        min_ratio = float(getattr(opt, "view_support_min_ratio", 0.0))
+        if not (0.0 < min_ratio <= 1.0):
+            raise ValueError("view_support_min_ratio must be in (0, 1].")
+        if float(getattr(opt, "view_support_opacity_reg", -1.0)) < 0.0:
+            raise ValueError("view_support_opacity_reg must be non-negative.")
+        if float(getattr(opt, "view_support_scale_reg", -1.0)) < 0.0:
+            raise ValueError("view_support_scale_reg must be non-negative.")
+        if float(getattr(opt, "view_support_max_scale_ratio", 0.0)) <= 0.0:
+            raise ValueError("view_support_max_scale_ratio must be greater than 0.")
+
     return {
         "training_method": method,
         "use_las": use_las,
         "use_eas": use_eas,
         "use_mu": use_mu,
         "use_rap": use_rap,
+        "use_view_support_regularization": use_view_support_regularization,
     }

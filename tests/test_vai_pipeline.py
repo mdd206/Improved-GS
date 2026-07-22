@@ -36,6 +36,11 @@ from utils.coarse_to_fine import (
     resolve_training_resolution_scale,
     validate_coarse_to_fine_schedule,
 )
+from utils.view_support_regularization import (
+    compute_view_support_penalties,
+    compute_view_support_weights,
+    should_apply_view_support_regularization,
+)
 
 
 _EDGE_MODULE_SPEC = importlib.util.spec_from_file_location(
@@ -120,6 +125,50 @@ class CoarseToFineScheduleTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             validate_coarse_to_fine_schedule(opt)
+
+
+class ViewSupportRegularizationTests(unittest.TestCase):
+    def test_regularization_runs_only_at_completed_densification_window(self) -> None:
+        self.assertFalse(should_apply_view_support_regularization(500, 500, 15_000, 100))
+        self.assertTrue(should_apply_view_support_regularization(600, 500, 15_000, 100))
+        self.assertFalse(should_apply_view_support_regularization(650, 500, 15_000, 100))
+        self.assertFalse(should_apply_view_support_regularization(15_000, 500, 15_000, 100))
+
+    def test_support_weight_is_zero_after_threshold(self) -> None:
+        support = torch.tensor([0.0, 1.0, 2.0, 4.0])
+        weights = compute_view_support_weights(support, min_views=2.0, min_ratio=0.02)
+        torch.testing.assert_close(weights, torch.tensor([1.0, 0.5, 0.0, 0.0]))
+
+    def test_relative_threshold_grows_with_reference_support(self) -> None:
+        support = torch.tensor([0.0, 2.0, 10.0, 100.0])
+        weights = compute_view_support_weights(support, min_views=2.0, min_ratio=0.05)
+        torch.testing.assert_close(weights, torch.tensor([1.0, 0.6, 0.0, 0.0]))
+
+    def test_penalties_only_affect_low_support_gaussians(self) -> None:
+        opacity = torch.tensor([[0.8], [0.4], [0.6]], requires_grad=True)
+        scaling = torch.tensor(
+            [[0.02, 0.005, 0.005], [0.005, 0.005, 0.005], [0.03, 0.005, 0.005]],
+            requires_grad=True,
+        )
+        support = torch.tensor([[0.0], [1.0], [2.0]])
+        opacity_penalty, scale_penalty, weights = compute_view_support_penalties(
+            opacity,
+            scaling,
+            support,
+            min_views=2.0,
+            min_ratio=0.02,
+            scene_extent=1.0,
+            max_scale_ratio=0.01,
+        )
+        self.assertAlmostEqual(float(opacity_penalty.item()), 2.0 / 3.0, places=6)
+        self.assertAlmostEqual(float(scale_penalty.item()), 0.01 / 1.5, places=6)
+        torch.testing.assert_close(weights, torch.tensor([1.0, 0.5, 0.0]))
+
+        (opacity_penalty + scale_penalty).backward()
+        self.assertGreater(float(opacity.grad[0].item()), float(opacity.grad[1].item()))
+        self.assertEqual(float(opacity.grad[2].item()), 0.0)
+        self.assertGreater(float(scaling.grad[0].abs().sum().item()), 0.0)
+        self.assertEqual(float(scaling.grad[2].abs().sum().item()), 0.0)
 
 
 class ColmapIoTests(unittest.TestCase):
@@ -366,6 +415,12 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertTrue(train_config["coarse_to_fine"])
         self.assertEqual(train_config["coarse_to_fine_middle_iter"], 2000)
         self.assertEqual(train_config["coarse_to_fine_full_iter"], 5000)
+        self.assertTrue(train_config["view_support_regularization"])
+        self.assertEqual(train_config["view_support_min_views"], 2.0)
+        self.assertEqual(train_config["view_support_min_ratio"], 0.02)
+        self.assertEqual(train_config["view_support_opacity_reg"], 0.002)
+        self.assertEqual(train_config["view_support_scale_reg"], 0.01)
+        self.assertEqual(train_config["view_support_max_scale_ratio"], 0.01)
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -373,7 +428,7 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["jpeg_subsampling"], 2)
         self.assertEqual(render_config["output_extension"], "csv")
         notebook_source = "\n".join(code_cells)
-        self.assertIn("REPO_BRANCH = 'agent/coarse-to-fine'", notebook_source)
+        self.assertIn("REPO_BRANCH = 'agent/view-support-regularization'", notebook_source)
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 
