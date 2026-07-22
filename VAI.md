@@ -54,7 +54,14 @@ python vai_preprocess.py \
 
 ## 3. Train, render va evaluate
 
-Config [configs/vai_hcm0204.json](configs/vai_hcm0204.json) da dat:
+Khi chay notebook Kaggle, sua truc tiep dictionary `VAI_CONFIG` trong cell co tag
+`parameters`. Notebook ghi dictionary nay thanh
+`/kaggle/working/vai_hcm0204.runtime.json`; dry-run va train deu dung file runtime do,
+khong doc config HCM0204 trong source repo. File
+[configs/vai_hcm0204.json](configs/vai_hcm0204.json) chi la template cho cach chay CLI
+ngoai notebook.
+
+Config mac dinh trong notebook da dat:
 
 - `training_method=improvedgs`.
 - `eval=false` de dung toan bo 240 anh train, khong LLFF-hold anh.
@@ -135,3 +142,8 @@ Tool se tu choi tao ZIP neu thieu anh, sai kich thuoc, sai ten hoac co file thua
 ## 6. Notebook Kaggle
 
 [notebooks/vai_hcm0204.ipynb](notebooks/vai_hcm0204.ipynb) gom cac cell clone, cai dependency, preprocess, dry-run, train/render/evaluate va dong goi hai file ZIP render/evaluation.
+
+De thay doi iterations, budget Gaussian, duong dan output, tham so sharpen, JPEG,
+evaluation hoac cac train/render argument khac, chi sua cell `VAI_CONFIG` o dau
+notebook. Co the them argument moi vao `train_args` hoac `postprocess_args` ngay trong
+cell nay ma khong can sua file Python hay JSON trong repository.

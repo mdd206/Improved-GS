@@ -5,6 +5,7 @@ import csv
 import importlib.util
 import json
 import shutil
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -296,10 +297,36 @@ class ImageProcessingTests(unittest.TestCase):
                 self.assertEqual(saved_image.format, "JPEG")
                 self.assertEqual(JpegImagePlugin.get_sampling(saved_image), 2)
 
-    def test_hcm0204_config_has_requested_render_values(self) -> None:
-        config_path = Path(__file__).resolve().parents[1] / "configs" / "vai_hcm0204.json"
-        with open(config_path, encoding="utf-8") as handle:
-            config = json.load(handle)
+    def test_hcm0204_notebook_owns_runtime_config(self) -> None:
+        notebook_path = Path(__file__).resolve().parents[1] / "notebooks" / "vai_hcm0204.ipynb"
+        with open(notebook_path, encoding="utf-8") as handle:
+            notebook = json.load(handle)
+        code_cells = [
+            "".join(cell["source"])
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        ]
+        config_cells = [source for source in code_cells if "VAI_CONFIG =" in source]
+        self.assertEqual(len(config_cells), 1)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            work_root = Path(temp_dir)
+            phase_dir = work_root / "phase1"
+            (phase_dir / "public_set" / "HCM0204").mkdir(parents=True)
+            namespace = {
+                "PHASE_DIR": phase_dir,
+                "WORK_ROOT": work_root,
+                "json": json,
+                "sys": sys,
+            }
+            with patch("builtins.print"):
+                exec(config_cells[0], namespace)
+            config = namespace["VAI_CONFIG"]
+            runtime_path = namespace["RUNTIME_CONFIG_PATH"]
+            with open(runtime_path, encoding="utf-8") as handle:
+                saved_config = json.load(handle)
+            self.assertEqual(saved_config, config)
+
         render_config = config["postprocess_args"]
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
@@ -307,6 +334,9 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["jpeg_quality"], 95)
         self.assertEqual(render_config["jpeg_subsampling"], 2)
         self.assertEqual(render_config["output_extension"], "csv")
+        notebook_source = "\n".join(code_cells)
+        self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
+        self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 
 
 class EdgeMaskTests(unittest.TestCase):
