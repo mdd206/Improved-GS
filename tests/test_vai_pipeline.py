@@ -31,6 +31,11 @@ from vai.evaluation import compute_weighted_score
 from vai.image_processing import save_render_image, sharpen_image
 from vai.packaging import package_submission
 from vai.preprocessing import _synchronize_and_filter_images, preprocess_scene
+from utils.coarse_to_fine import (
+    build_training_resolution_scales,
+    resolve_training_resolution_scale,
+    validate_coarse_to_fine_schedule,
+)
 
 
 _EDGE_MODULE_SPEC = importlib.util.spec_from_file_location(
@@ -86,6 +91,35 @@ class VaiCommonTests(unittest.TestCase):
         score, normalized = compute_weighted_score(0.8, 30.0, 0.2, 40.0)
         self.assertAlmostEqual(normalized, 0.75)
         self.assertAlmostEqual(score, 0.785)
+
+
+class CoarseToFineScheduleTests(unittest.TestCase):
+    def test_disabled_schedule_always_uses_full_resolution(self) -> None:
+        opt = SimpleNamespace(coarse_to_fine=False)
+        self.assertEqual(build_training_resolution_scales(opt), [1.0])
+        self.assertEqual(resolve_training_resolution_scale(1, opt), 1.0)
+
+    def test_enabled_schedule_changes_at_configured_iterations(self) -> None:
+        opt = SimpleNamespace(
+            coarse_to_fine=True,
+            coarse_to_fine_middle_iter=2_000,
+            coarse_to_fine_full_iter=5_000,
+        )
+        self.assertEqual(build_training_resolution_scales(opt), [4.0, 2.0, 1.0])
+        self.assertEqual(resolve_training_resolution_scale(1, opt), 4.0)
+        self.assertEqual(resolve_training_resolution_scale(1_999, opt), 4.0)
+        self.assertEqual(resolve_training_resolution_scale(2_000, opt), 2.0)
+        self.assertEqual(resolve_training_resolution_scale(4_999, opt), 2.0)
+        self.assertEqual(resolve_training_resolution_scale(5_000, opt), 1.0)
+
+    def test_enabled_schedule_rejects_invalid_iteration_order(self) -> None:
+        opt = SimpleNamespace(
+            coarse_to_fine=True,
+            coarse_to_fine_middle_iter=5_000,
+            coarse_to_fine_full_iter=2_000,
+        )
+        with self.assertRaises(ValueError):
+            validate_coarse_to_fine_schedule(opt)
 
 
 class ColmapIoTests(unittest.TestCase):
@@ -328,6 +362,10 @@ class ImageProcessingTests(unittest.TestCase):
             self.assertEqual(saved_config, config)
 
         render_config = config["postprocess_args"]
+        train_config = config["train_args"]
+        self.assertTrue(train_config["coarse_to_fine"])
+        self.assertEqual(train_config["coarse_to_fine_middle_iter"], 2000)
+        self.assertEqual(train_config["coarse_to_fine_full_iter"], 5000)
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -335,6 +373,7 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["jpeg_subsampling"], 2)
         self.assertEqual(render_config["output_extension"], "csv")
         notebook_source = "\n".join(code_cells)
+        self.assertIn("REPO_BRANCH = 'agent/coarse-to-fine'", notebook_source)
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 

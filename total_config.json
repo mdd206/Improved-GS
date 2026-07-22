@@ -67,6 +67,11 @@
         "use_eas": true,
         "use_mu": true
       },
+      "coarse_to_fine": {
+        "coarse_to_fine": false,
+        "coarse_to_fine_middle_iter": 2000,
+        "coarse_to_fine_full_iter": 5000
+      },
       "minigs": {
         "minigs_imp_metric": "outdoor",
         "minigs_num_depth": 3500000,

@@ -13,6 +13,9 @@
   "train_args": {
     "training_method": "improvedgs",
     "iterations": 30000,
+    "coarse_to_fine": true,
+    "coarse_to_fine_middle_iter": 2000,
+    "coarse_to_fine_full_iter": 5000,
     "eval": false,
     "resolution": -1,
     "data_device": "cpu",

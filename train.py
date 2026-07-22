@@ -33,7 +33,9 @@ from scene.training_runtime import (
     resolve_start_checkpoint_path,
     sample_training_viewpoint,
     synchronized_timestamp,
+    update_training_resolution,
 )
+from utils.coarse_to_fine import build_training_resolution_scales
 
 
 def training(dataset: GroupParams, opt: GroupParams, pipe: GroupParams, runtime_args: Namespace) -> float:
@@ -45,13 +47,16 @@ def training(dataset: GroupParams, opt: GroupParams, pipe: GroupParams, runtime_
         optimization, logging, densification, and pruning until the final
         iteration.
     """
+    # Nap truoc cac muc do phan giai can dung de Scene tao dung camera.
+    resolution_scales = build_training_resolution_scales(opt)
+
     # Prepare the output folder before any model state is created, so config and logs match this run.
     prepare_output_and_logger(dataset, runtime_args)
 
     # Build shared objects in dependency order: config context, Gaussian model, scene, then optimizer state.
     training_context = build_training_context(dataset, opt, pipe, runtime_args)
     gaussians = build_gaussian_model_3dgs(dataset, opt)
-    scene = Scene(dataset, gaussians)
+    scene = Scene(dataset, gaussians, resolution_scales=resolution_scales)
     training_context = attach_scene_and_gaussians_to_context(training_context, scene, gaussians)
     gaussians.training_setup(opt)
 
@@ -87,8 +92,15 @@ def training(dataset: GroupParams, opt: GroupParams, pipe: GroupParams, runtime_
             # Update time-based settings, such as SH degree and method-specific training cadence.
             update_3dgs_training_schedule(training_context, gaussians, iteration)
 
+            # Doi camera pool dung tai cac moc 1/4, 1/2 va full resolution.
+            update_training_resolution(training_context, loop_state, iteration)
+
             # Pick one training camera and build gradients from rendering plus all active loss terms.
-            viewpoint_cam = sample_training_viewpoint(scene, loop_state["viewpoint_stack"])
+            viewpoint_cam = sample_training_viewpoint(
+                scene,
+                loop_state["viewpoint_stack"],
+                loop_state["training_resolution_scale"],
+            )
             optimization_outputs = run_3dgs_optimization_method(
                 training_context,
                 gaussians,

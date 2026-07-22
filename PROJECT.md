@@ -157,6 +157,20 @@ Component switches:
 | `use_eas` | Whether to enable EAS |
 | `use_mu` | Whether to enable MU |
 
+Coarse-to-fine training is optional and can be combined with ImprovedGS without changing its densification method:
+
+```json
+{
+  "train_args": {
+    "coarse_to_fine": true,
+    "coarse_to_fine_middle_iter": 2000,
+    "coarse_to_fine_full_iter": 5000
+  }
+}
+```
+
+The fixed resolution sequence is `1/4 -> 1/2 -> full`. The two iteration parameters select when training enters `1/2` and full resolution.
+
 Common parameters:
 
 | Parameter | Description |

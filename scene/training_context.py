@@ -13,6 +13,7 @@ from scene import Scene
 from scene.gaussian_model import GaussianModel as GaussianModel3DGS
 from scene.methods.densification_methods import prepare_edge_maps
 from scene.methods.training_config import build_training_method_config
+from utils.coarse_to_fine import resolve_training_resolution_scale
 
 
 class RuntimeState(TypedDict, total=False):
@@ -40,6 +41,7 @@ class RuntimeState(TypedDict, total=False):
     dataset_sh_degree: Optional[int]
     minigs_background: Optional[torch.Tensor]
     train_cameras: list[Any]
+    training_resolution_scale: float
 
 
 @dataclass(slots=True)
@@ -74,6 +76,8 @@ def initialize_runtime_state(
         initialized so later stages can update them without extra setup checks.
     """
     method = str(method_config.get("training_method", "3dgs")).lower()
+    training_resolution_scale = resolve_training_resolution_scale(1, opt)
+    train_cameras = scene.getTrainCameras(training_resolution_scale).copy()
     runtime_state: RuntimeState = {
         "edge_maps": [],
         "edge_camera_pool": [],
@@ -91,7 +95,8 @@ def initialize_runtime_state(
         "pipe": None,
         "dataset_sh_degree": None,
         "minigs_background": None,
-        "train_cameras": scene.getTrainCameras().copy(),
+        "train_cameras": train_cameras,
+        "training_resolution_scale": training_resolution_scale,
     }
     if method in ("improvedgs", "gns"):
         train_cameras = runtime_state["train_cameras"]
@@ -102,6 +107,26 @@ def initialize_runtime_state(
     if method == "minigs":
         runtime_state["minigs_mask_blur"] = torch.zeros((gaussians.get_xyz.shape[0],), device="cuda", dtype=torch.bool)
     return runtime_state
+
+
+def activate_training_resolution(context: TrainingContext, resolution_scale: float) -> list[Any]:
+    """Doi camera va edge map sang cung mot muc do phan giai."""
+    scene = context.scene
+    if scene is None:
+        raise ValueError("Training context is missing scene before changing resolution.")
+
+    train_cameras = scene.getTrainCameras(float(resolution_scale)).copy()
+    runtime_state = context.runtime_state
+    runtime_state["train_cameras"] = train_cameras
+    runtime_state["training_resolution_scale"] = float(resolution_scale)
+
+    method = str(context.method_config.get("training_method", "3dgs")).lower()
+    use_eas = method in ("improvedgs", "gns") and bool(context.method_config.get("use_eas", True))
+    edge_maps = prepare_edge_maps(train_cameras, context.opt) if use_eas else []
+    runtime_state["edge_maps"] = edge_maps
+    runtime_state["edge_camera_pool"] = train_cameras.copy()
+    runtime_state["edge_map_pool"] = edge_maps.copy()
+    return train_cameras
 
 
 def build_training_context(dataset: Any, opt: Any, pipe: Any, runtime_args: Any) -> TrainingContext:

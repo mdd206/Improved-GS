@@ -21,7 +21,8 @@ from utils.general_utils import get_expon_lr_func
 from utils.experiment_utils import append_log_lines, archive_existing_output, write_training_parameters
 from utils.loss_utils import psnr
 from utils.loss_utils import ssim
-from scene.training_context import TrainingContext
+from scene.training_context import TrainingContext, activate_training_resolution
+from utils.coarse_to_fine import resolve_training_resolution_scale
 
 
 class TrainingLoopState(TypedDict):
@@ -39,6 +40,7 @@ class TrainingLoopState(TypedDict):
     testing_iterations: list[int]
     saving_iterations: list[int]
     checkpoint_iterations: list[int]
+    training_resolution_scale: float
 
 
 def synchronized_timestamp() -> float:
@@ -130,6 +132,8 @@ def build_training_loop_state(
     runtime_state["dataset_sh_degree"] = int(dataset.sh_degree)
     runtime_state["minigs_background"] = background
 
+    training_resolution_scale = float(runtime_state.get("training_resolution_scale", 1.0))
+    train_cameras = list(runtime_state.get("train_cameras") or scene.getTrainCameras(training_resolution_scale))
     return {
         "background": background,
         "log_path": os.path.join(scene.model_path, "log.txt"),
@@ -139,14 +143,37 @@ def build_training_loop_state(
             max_steps=opt.iterations,
         ),
         "report_lpips_model": LPIPS("vgg").to("cuda").eval() if (report_lpips_test or report_lpips_train) else None,
-        "viewpoint_stack": scene.getTrainCameras().copy(),
+        "viewpoint_stack": train_cameras.copy(),
         "testing_iterations": list(runtime_args.test_iterations),
         "saving_iterations": list(runtime_args.save_iterations),
         "checkpoint_iterations": list(runtime_args.checkpoint_iterations),
+        "training_resolution_scale": training_resolution_scale,
     }
 
 
-def sample_training_viewpoint(scene: Scene, viewpoint_stack: list[Any]) -> Any:
+def update_training_resolution(
+    context: TrainingContext,
+    loop_state: TrainingLoopState,
+    iteration: int,
+) -> None:
+    """Doi camera pool khi iteration di qua mot moc coarse-to-fine."""
+    target_scale = resolve_training_resolution_scale(iteration, context.opt)
+    current_scale = float(loop_state.get("training_resolution_scale", 1.0))
+    if target_scale == current_scale:
+        return
+
+    train_cameras = activate_training_resolution(context, target_scale)
+    loop_state["viewpoint_stack"].clear()
+    loop_state["viewpoint_stack"].extend(train_cameras)
+    loop_state["training_resolution_scale"] = target_scale
+    print("Coarse-to-fine: switched training resolution to 1/{} at iteration {}".format(int(target_scale), iteration))
+
+
+def sample_training_viewpoint(
+    scene: Scene,
+    viewpoint_stack: list[Any],
+    resolution_scale: float = 1.0,
+) -> Any:
     """
         Draw one random training camera without replacement.
 
@@ -154,7 +181,7 @@ def sample_training_viewpoint(scene: Scene, viewpoint_stack: list[Any]) -> Any:
         pass sees all training cameras in a random order.
     """
     if not viewpoint_stack:
-        viewpoint_stack.extend(scene.getTrainCameras().copy())
+        viewpoint_stack.extend(scene.getTrainCameras(float(resolution_scale)).copy())
     random_index = torch.randint(0, len(viewpoint_stack), (1,)).item()
     return viewpoint_stack.pop(random_index)
 

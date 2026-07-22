@@ -196,6 +196,18 @@ class TrainingMethodParams(ParamGroup):
         super().__init__(parser, "Training Method Parameters")
 
 
+class CoarseToFineParams(ParamGroup):
+    """
+        Lich tang do phan giai trong giai do dau cua qua trinh train.
+    """
+    def __init__(self, parser: ArgumentParser) -> None:
+        self.coarse_to_fine = False  # Bat lich 1/4, 1/2 roi full resolution
+        self.coarse_to_fine_middle_iter = 2_000  # Chuyen tu 1/4 sang 1/2 resolution
+        self.coarse_to_fine_full_iter = 5_000  # Chuyen tu 1/2 sang full resolution
+        self._fields = {key: value for key, value in vars(self).items() if not key.startswith("__")}
+        super().__init__(parser, "Coarse-to-Fine Parameters")
+
+
 class MiniGSParams(ParamGroup):
     """
         MiniGS-specific limits and periodic reinitialization settings.
@@ -279,6 +291,7 @@ class OptimizationParams:
         self.groups = [
             OptimizationBaseParams(parser),
             TrainingMethodParams(parser),
+            CoarseToFineParams(parser),
             MiniGSParams(parser),
             ImprovedGSParams(parser),
             MCMCParams(parser),
