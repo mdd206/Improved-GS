@@ -14,6 +14,7 @@ from scene.gaussian_model import GaussianModel as GaussianModel3DGS
 from scene.methods.densification_methods import prepare_edge_maps
 from scene.methods.training_config import build_training_method_config
 from utils.coarse_to_fine import resolve_training_resolution_scale
+from utils.frequency_regularization import validate_fregs_lite_options
 
 
 class RuntimeState(TypedDict, total=False):
@@ -137,6 +138,7 @@ def build_training_context(dataset: Any, opt: Any, pipe: Any, runtime_args: Any)
         modules can read both normal options and resolved method switches from
         the same object.
     """
+    validate_fregs_lite_options(opt)
     method_config = build_training_method_config(opt)
 
     # Store resolved method settings on opt so later stage calls do not repeat parsing.

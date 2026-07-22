@@ -208,6 +208,24 @@ class CoarseToFineParams(ParamGroup):
         super().__init__(parser, "Coarse-to-Fine Parameters")
 
 
+class FreGSLiteParams(ParamGroup):
+    """Progressive frequency-regularization settings for the FreGS-lite experiment."""
+    def __init__(self, parser: ArgumentParser) -> None:
+        self.fregs_lite = False  # Enable luminance rFFT frequency supervision
+        self.fregs_weight = 0.01  # Weight of the complete frequency loss
+        self.fregs_phase_weight = 0.1  # Phase contribution relative to amplitude
+        self.fregs_detail_weight = 1.0  # Progressive detail-band contribution
+        self.fregs_start_iter = -1  # -1 follows densify_from_iter
+        self.fregs_until_iter = -1  # -1 follows densify_until_iter
+        self.fregs_interval = 1  # Apply frequency loss every N iterations
+        self.fregs_low_radius = 0.15  # Normalized low-frequency radius
+        self.fregs_middle_radius = 0.5  # Radius reached when C2F enters full resolution
+        self.fregs_hann_window = True  # Suppress FFT leakage at image/mask borders
+        self.fregs_epsilon = 1e-6  # Numerical floor for phase and mask normalization
+        self._fields = {key: value for key, value in vars(self).items() if not key.startswith("__")}
+        super().__init__(parser, "FreGS-Lite Parameters")
+
+
 class MiniGSParams(ParamGroup):
     """
         MiniGS-specific limits and periodic reinitialization settings.
@@ -292,6 +310,7 @@ class OptimizationParams:
             OptimizationBaseParams(parser),
             TrainingMethodParams(parser),
             CoarseToFineParams(parser),
+            FreGSLiteParams(parser),
             MiniGSParams(parser),
             ImprovedGSParams(parser),
             MCMCParams(parser),

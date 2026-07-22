@@ -14,6 +14,7 @@ from fused_ssim import fused_ssim
 from gaussian_renderer import render
 from scene.gaussian_model import GaussianModel as GaussianModel3DGS
 from utils.loss_utils import l1_loss
+from utils.frequency_regularization import compute_fregs_lite_loss
 from scene.methods.regularization_methods import apply_regularization_method
 from scene.training_context import TrainingContext
 from scene.training_runtime import TrainingLoopState
@@ -50,6 +51,21 @@ def _compute_reconstruction_loss(image: torch.Tensor, gt_image: torch.Tensor, la
     return (1.0 - float(lambda_dssim)) * l1_value + float(lambda_dssim) * (1.0 - ssim_value)
 
 
+def _log_fregs_lite_if_needed(iteration: int, frequency_outputs: dict[str, torch.Tensor | float]) -> None:
+    """Report frequency-loss components sparsely without adding per-step CUDA syncs."""
+    if int(iteration) % 1_000 != 0 or float(frequency_outputs["max_radius"]) <= 0.0:
+        return
+    print(
+        "\nFreGS-lite: iteration={}, radius={:.3f}, amplitude={:.6f}, phase={:.6f}, weighted={:.6f}".format(
+            int(iteration),
+            float(frequency_outputs["max_radius"]),
+            float(frequency_outputs["amplitude_loss"].detach().item()),
+            float(frequency_outputs["phase_loss"].detach().item()),
+            float(frequency_outputs["loss"].detach().item()),
+        )
+    )
+
+
 def run_3dgs_optimization_method(
     context: TrainingContext,
     gaussians: GaussianModel3DGS,
@@ -75,14 +91,28 @@ def run_3dgs_optimization_method(
         bg,
         use_trained_exp=dataset.train_test_exp,
     )
-    image = render_pkg["render"]
+    rendered_image = render_pkg["render"]
 
     # Match the loss to valid image pixels only when the dataset provides an alpha mask.
+    valid_mask = None
     if viewpoint_cam.alpha_mask is not None:
-        image = image * viewpoint_cam.alpha_mask.cuda()
+        valid_mask = viewpoint_cam.alpha_mask.cuda()
+        image = rendered_image * valid_mask
+    else:
+        image = rendered_image
 
     gt_image = viewpoint_cam.original_image.cuda()
     loss = _compute_reconstruction_loss(image, gt_image, float(context.opt.lambda_dssim))
+    if bool(context.method_config.get("fregs_lite", False)):
+        frequency_outputs = compute_fregs_lite_loss(
+            rendered_image,
+            gt_image,
+            valid_mask,
+            context.opt,
+            iteration,
+        )
+        loss = loss + frequency_outputs["loss"]
+        _log_fregs_lite_if_needed(iteration, frequency_outputs)
 
     # Add monocular inverse-depth supervision when the view marks its depth map as reliable.
     depth_l1_weight = loop_state["depth_l1_weight"]

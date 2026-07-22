@@ -36,6 +36,13 @@ from utils.coarse_to_fine import (
     resolve_training_resolution_scale,
     validate_coarse_to_fine_schedule,
 )
+from utils.frequency_regularization import (
+    compute_fregs_lite_loss,
+    resolve_fregs_max_radius,
+    resolve_fregs_window,
+    should_run_fregs_lite,
+    validate_fregs_lite_options,
+)
 
 
 _EDGE_MODULE_SPEC = importlib.util.spec_from_file_location(
@@ -120,6 +127,88 @@ class CoarseToFineScheduleTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             validate_coarse_to_fine_schedule(opt)
+
+
+class FreGSLiteTests(unittest.TestCase):
+    def make_options(self, **overrides: object) -> SimpleNamespace:
+        values = {
+            "fregs_lite": True,
+            "fregs_weight": 0.01,
+            "fregs_phase_weight": 0.1,
+            "fregs_detail_weight": 1.0,
+            "fregs_start_iter": -1,
+            "fregs_until_iter": -1,
+            "fregs_interval": 1,
+            "fregs_low_radius": 0.15,
+            "fregs_middle_radius": 0.5,
+            "fregs_hann_window": False,
+            "fregs_epsilon": 1e-6,
+            "densify_from_iter": 500,
+            "densify_until_iter": 15_000,
+            "coarse_to_fine": True,
+            "coarse_to_fine_middle_iter": 2_000,
+            "coarse_to_fine_full_iter": 5_000,
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_window_and_frequency_radius_follow_c2f_stages(self) -> None:
+        opt = self.make_options()
+        self.assertEqual(resolve_fregs_window(opt), (500, 15_000))
+        self.assertFalse(should_run_fregs_lite(opt, 499))
+        self.assertTrue(should_run_fregs_lite(opt, 500))
+        self.assertFalse(should_run_fregs_lite(opt, 15_001))
+        self.assertAlmostEqual(resolve_fregs_max_radius(opt, 500), 0.15)
+        self.assertAlmostEqual(resolve_fregs_max_radius(opt, 1_999), 0.15)
+        self.assertAlmostEqual(resolve_fregs_max_radius(opt, 2_000), 0.15)
+        self.assertAlmostEqual(resolve_fregs_max_radius(opt, 5_000), 0.5)
+        self.assertAlmostEqual(resolve_fregs_max_radius(opt, 15_000), 1.0)
+
+    def test_validation_rejects_invalid_band_or_weight(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_fregs_lite_options(self.make_options(fregs_weight=0.0))
+        with self.assertRaises(ValueError):
+            validate_fregs_lite_options(self.make_options(fregs_low_radius=0.6))
+
+    def test_identical_images_have_zero_frequency_loss(self) -> None:
+        opt = self.make_options()
+        image = torch.rand((3, 8, 10), dtype=torch.float32)
+        outputs = compute_fregs_lite_loss(image, image.clone(), None, opt, 5_000)
+        self.assertAlmostEqual(float(outputs["amplitude_loss"]), 0.0, places=7)
+        self.assertAlmostEqual(float(outputs["phase_loss"]), 0.0, places=6)
+        self.assertAlmostEqual(float(outputs["loss"]), 0.0, places=7)
+
+    def test_alpha_mask_removes_invalid_border_from_frequency_loss(self) -> None:
+        opt = self.make_options()
+        rendered = torch.zeros((3, 8, 8), dtype=torch.float32)
+        target = torch.ones_like(rendered)
+        valid_mask = torch.zeros((1, 8, 8), dtype=torch.float32)
+        valid_mask[:, 2:6, 2:6] = 1.0
+        target[:, 2:6, 2:6] = 0.0
+        outputs = compute_fregs_lite_loss(rendered, target, valid_mask, opt, 5_000)
+        self.assertAlmostEqual(float(outputs["loss"]), 0.0, places=7)
+
+    def test_progressive_band_reveals_checkerboard_detail(self) -> None:
+        opt = self.make_options()
+        rendered = torch.zeros((3, 16, 16), dtype=torch.float32)
+        row = torch.arange(16, dtype=torch.float32)[:, None]
+        column = torch.arange(16, dtype=torch.float32)[None, :]
+        checkerboard = ((row + column) % 2.0) * 2.0 - 1.0
+        target = checkerboard.unsqueeze(0).repeat(3, 1, 1)
+        low_outputs = compute_fregs_lite_loss(rendered, target, None, opt, 500)
+        full_outputs = compute_fregs_lite_loss(rendered, target, None, opt, 15_000)
+        self.assertAlmostEqual(float(low_outputs["loss"]), 0.0, places=7)
+        self.assertGreater(float(full_outputs["loss"]), 0.0)
+
+    def test_frequency_loss_backpropagates_finite_gradients(self) -> None:
+        opt = self.make_options(fregs_hann_window=True)
+        rendered = torch.rand((3, 8, 10), dtype=torch.float32, requires_grad=True)
+        target = torch.rand_like(rendered)
+        outputs = compute_fregs_lite_loss(rendered, target, None, opt, 5_000)
+        outputs["loss"].backward()
+        self.assertIsNotNone(rendered.grad)
+        self.assertTrue(bool(torch.isfinite(rendered.grad).all()))
+        self.assertGreater(float(rendered.grad.abs().sum()), 0.0)
 
 
 class ColmapIoTests(unittest.TestCase):
@@ -366,6 +455,12 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertTrue(train_config["coarse_to_fine"])
         self.assertEqual(train_config["coarse_to_fine_middle_iter"], 2000)
         self.assertEqual(train_config["coarse_to_fine_full_iter"], 5000)
+        self.assertTrue(train_config["fregs_lite"])
+        self.assertEqual(train_config["fregs_weight"], 0.01)
+        self.assertEqual(train_config["fregs_phase_weight"], 0.1)
+        self.assertEqual(train_config["fregs_interval"], 1)
+        self.assertEqual(train_config["fregs_low_radius"], 0.15)
+        self.assertEqual(train_config["fregs_middle_radius"], 0.5)
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -373,7 +468,7 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["jpeg_subsampling"], 2)
         self.assertEqual(render_config["output_extension"], "csv")
         notebook_source = "\n".join(code_cells)
-        self.assertIn("REPO_BRANCH = 'agent/coarse-to-fine'", notebook_source)
+        self.assertIn("REPO_BRANCH = 'agent/fregs-lite'", notebook_source)
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 

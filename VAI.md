@@ -65,6 +65,8 @@ Config mac dinh trong notebook da dat:
 
 - `training_method=improvedgs`.
 - `coarse_to_fine=true`: train 1/4 resolution den iteration 2.000, 1/2 den 5.000, sau do dung full resolution.
+- `fregs_lite=true`: them log-amplitude va wrapped-phase loss tren luminance `rfft2`. Band tan so giu low o 1/4, mo low-to-mid o 1/2 va mid-to-full tu iteration 5.000 den khi densification ket thuc o 15.000.
+- FreGS-lite ap dung alpha mask va Hann window de vien anh undistort khong tao tin hieu tan so gia.
 - `eval=false` de dung toan bo 240 anh train, khong LLFF-hold anh.
 - `data_device=cpu` de 240 anh va edge map khong chiem bo nho GPU Kaggle.
 - `postprocess_script=vai_render.py`.
@@ -148,3 +150,8 @@ De thay doi iterations, budget Gaussian, duong dan output, tham so sharpen, JPEG
 evaluation hoac cac train/render argument khac, chi sua cell `VAI_CONFIG` o dau
 notebook. Co the them argument moi vao `train_args` hoac `postprocess_args` ngay trong
 cell nay ma khong can sua file Python hay JSON trong repository.
+
+Tham so FreGS-lite mac dinh cua notebook la `fregs_weight=0.01`,
+`fregs_phase_weight=0.1`, `fregs_low_radius=0.15` va
+`fregs_middle_radius=0.5`. Dat `fregs_lite=false` de quay lai ImprovedGS +
+coarse-to-fine ma khong doi cac tham so khac.
