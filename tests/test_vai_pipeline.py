@@ -1,6 +1,7 @@
 """Kiem thu cac phan VAI khong can COLMAP CLI hoac CUDA rasterizer."""
 from __future__ import annotations
 
+import ast
 import csv
 import importlib.util
 import json
@@ -429,6 +430,8 @@ class ImageProcessingTests(unittest.TestCase):
             for cell in notebook["cells"]
             if cell["cell_type"] == "code"
         ]
+        for source in code_cells:
+            ast.parse(source)
         config_cells = [source for source in code_cells if "VAI_CONFIG =" in source]
         self.assertEqual(len(config_cells), 1)
 
@@ -469,6 +472,9 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["output_extension"], "csv")
         notebook_source = "\n".join(code_cells)
         self.assertIn("REPO_BRANCH = 'agent/fregs-lite'", notebook_source)
+        self.assertIn("'--no-install-recommends', 'colmap'", notebook_source)
+        self.assertIn("install_colmap_with_conda", notebook_source)
+        self.assertNotIn("'install', '-y', '-qq', 'colmap'", notebook_source)
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 
