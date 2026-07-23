@@ -226,6 +226,21 @@ class FreGSLiteParams(ParamGroup):
         super().__init__(parser, "FreGS-Lite Parameters")
 
 
+class PoseAwareSamplingParams(ParamGroup):
+    """
+        Sampling uu tien train camera gan cac test pose thieu coverage.
+    """
+    def __init__(self, parser: ArgumentParser) -> None:
+        self.pose_aware_sampling = False  # Bat camera pool theo test pose
+        self.pose_aware_test_poses = ""  # Duong dan CSV, rong thi dung test/test_poses.csv
+        self.pose_aware_k = 3  # So train camera gan moi test pose
+        self.pose_aware_extra_fraction = 0.25  # So luot lap them theo ty le train camera
+        self.pose_aware_max_repeat = 2  # Gioi han so lan mot camera co trong pool
+        self.pose_aware_angle_weight = 0.25  # Trong so goc nhin trong neighbor cost
+        self._fields = {key: value for key, value in vars(self).items() if not key.startswith("__")}
+        super().__init__(parser, "Pose-Aware Sampling Parameters")
+
+
 class MiniGSParams(ParamGroup):
     """
         MiniGS-specific limits and periodic reinitialization settings.
@@ -311,6 +326,7 @@ class OptimizationParams:
             TrainingMethodParams(parser),
             CoarseToFineParams(parser),
             FreGSLiteParams(parser),
+            PoseAwareSamplingParams(parser),
             MiniGSParams(parser),
             ImprovedGSParams(parser),
             MCMCParams(parser),

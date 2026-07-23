@@ -72,6 +72,14 @@
         "coarse_to_fine_middle_iter": 2000,
         "coarse_to_fine_full_iter": 5000
       },
+      "pose_aware_sampling": {
+        "pose_aware_sampling": false,
+        "pose_aware_test_poses": "",
+        "pose_aware_k": 3,
+        "pose_aware_extra_fraction": 0.25,
+        "pose_aware_max_repeat": 2,
+        "pose_aware_angle_weight": 0.25
+      },
       "minigs": {
         "minigs_imp_metric": "outdoor",
         "minigs_num_depth": 3500000,

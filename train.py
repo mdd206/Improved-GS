@@ -100,6 +100,7 @@ def training(dataset: GroupParams, opt: GroupParams, pipe: GroupParams, runtime_
                 scene,
                 loop_state["viewpoint_stack"],
                 loop_state["training_resolution_scale"],
+                loop_state["viewpoint_repeat_counts"],
             )
             optimization_outputs = run_3dgs_optimization_method(
                 training_context,

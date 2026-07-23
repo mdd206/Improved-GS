@@ -171,6 +171,22 @@ Coarse-to-fine training is optional and can be combined with ImprovedGS without 
 
 The fixed resolution sequence is `1/4 -> 1/2 -> full`. The two iteration parameters select when training enters `1/2` and full resolution.
 
+Pose-aware sampling is optional and uses only the camera extrinsics in `test/test_poses.csv`. Every training camera remains in the sampling pool once. The most useful training cameras near sparse test poses receive a limited number of extra slots:
+
+```json
+{
+  "train_args": {
+    "pose_aware_sampling": true,
+    "pose_aware_k": 3,
+    "pose_aware_extra_fraction": 0.25,
+    "pose_aware_max_repeat": 2,
+    "pose_aware_angle_weight": 0.25
+  }
+}
+```
+
+The neighbor cost combines camera-center distance normalized by the median training-camera spacing and view-direction difference. `pose_aware_extra_fraction=0.25` adds about 25% extra pool slots, while `pose_aware_max_repeat=2` prevents one camera from dominating. Set `pose_aware_test_poses` only when the pose CSV is not at the default location.
+
 Common parameters:
 
 | Parameter | Description |
@@ -189,6 +205,12 @@ Common parameters:
 | `mu_interval` | MU first-stage update interval |
 | `mu_second_start_iter` | MU second-stage start iteration |
 | `mu_second_interval` | MU second-stage update interval |
+| `pose_aware_sampling` | Whether to prioritize training views near sparse test poses |
+| `pose_aware_test_poses` | Test-pose CSV path; empty uses `test/test_poses.csv` |
+| `pose_aware_k` | Number of neighboring training cameras per test pose |
+| `pose_aware_extra_fraction` | Extra sampling-pool slots relative to the training-camera count |
+| `pose_aware_max_repeat` | Maximum copies of one camera in the sampling pool |
+| `pose_aware_angle_weight` | View-direction weight in pose-neighbor cost |
 
 ### 4.2 GNS
 

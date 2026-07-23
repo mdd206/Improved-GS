@@ -44,6 +44,12 @@ from utils.frequency_regularization import (
     should_run_fregs_lite,
     validate_fregs_lite_options,
 )
+from utils.pose_aware_sampling import (
+    CameraPose,
+    build_pose_sampling_plan,
+    build_repeated_camera_pool,
+    pose_from_csv_row,
+)
 
 
 _EDGE_MODULE_SPEC = importlib.util.spec_from_file_location(
@@ -210,6 +216,69 @@ class FreGSLiteTests(unittest.TestCase):
         self.assertIsNotNone(rendered.grad)
         self.assertTrue(bool(torch.isfinite(rendered.grad).all()))
         self.assertGreater(float(rendered.grad.abs().sum()), 0.0)
+
+
+class PoseAwareSamplingTests(unittest.TestCase):
+    def test_identity_csv_pose_converts_translation_to_camera_center(self) -> None:
+        pose = pose_from_csv_row(
+            {
+                "qw": "1",
+                "qx": "0",
+                "qy": "0",
+                "qz": "0",
+                "tx": "1",
+                "ty": "2",
+                "tz": "3",
+            }
+        )
+        np.testing.assert_allclose(pose.center, [-1.0, -2.0, -3.0])
+        np.testing.assert_allclose(pose.forward, [0.0, 0.0, 1.0])
+
+    def test_sparse_test_neighbor_gets_one_extra_slot_without_losing_coverage(self) -> None:
+        cameras = [
+            SimpleNamespace(uid=index, camera_center=np.array([x, 0.0, 0.0]), R=np.eye(3))
+            for index, x in enumerate([0.0, 1.0, 2.0, 10.0])
+        ]
+        test_poses = [CameraPose(center=np.array([12.0, 0.0, 0.0]), forward=np.array([0.0, 0.0, 1.0]))]
+        plan = build_pose_sampling_plan(
+            cameras,
+            test_poses,
+            neighbor_count=1,
+            extra_fraction=0.25,
+            max_repeat=2,
+            angle_weight=0.25,
+        )
+
+        self.assertEqual(plan.repeat_counts, {0: 1, 1: 1, 2: 1, 3: 2})
+        self.assertEqual(plan.extra_count, 1)
+        self.assertEqual(plan.pool_size, 5)
+        self.assertAlmostEqual(plan.median_train_spacing, 1.0)
+        self.assertAlmostEqual(plan.max_test_gap, 2.0)
+        pool = build_repeated_camera_pool(cameras, plan.repeat_counts)
+        self.assertEqual(len(pool), 5)
+        self.assertTrue(all(any(item is camera for item in pool) for camera in cameras))
+        self.assertEqual(sum(item is cameras[3] for item in pool), 2)
+
+    def test_view_direction_can_override_a_small_position_advantage(self) -> None:
+        cameras = [
+            SimpleNamespace(uid=0, camera_center=np.array([0.0, 0.0, 0.0]), R=np.eye(3)),
+            SimpleNamespace(
+                uid=1,
+                camera_center=np.array([0.1, 0.0, 0.0]),
+                R=np.diag([-1.0, 1.0, -1.0]),
+            ),
+        ]
+        test_poses = [CameraPose(center=np.array([0.08, 0.0, 0.0]), forward=np.array([0.0, 0.0, 1.0]))]
+        plan = build_pose_sampling_plan(
+            cameras,
+            test_poses,
+            neighbor_count=1,
+            extra_fraction=0.5,
+            max_repeat=2,
+            angle_weight=0.25,
+        )
+
+        self.assertEqual(plan.repeat_counts, {0: 2, 1: 1})
 
 
 class ColmapIoTests(unittest.TestCase):
@@ -464,6 +533,11 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(train_config["fregs_interval"], 1)
         self.assertEqual(train_config["fregs_low_radius"], 0.15)
         self.assertEqual(train_config["fregs_middle_radius"], 0.5)
+        self.assertTrue(train_config["pose_aware_sampling"])
+        self.assertEqual(train_config["pose_aware_k"], 3)
+        self.assertEqual(train_config["pose_aware_extra_fraction"], 0.25)
+        self.assertEqual(train_config["pose_aware_max_repeat"], 2)
+        self.assertEqual(train_config["pose_aware_angle_weight"], 0.25)
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -471,7 +545,12 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["jpeg_subsampling"], 2)
         self.assertEqual(render_config["output_extension"], "csv")
         notebook_source = "\n".join(code_cells)
-        self.assertIn("REPO_BRANCH = 'agent/fregs-lite'", notebook_source)
+        self.assertIn("REPO_BRANCH = 'agent/c2f-pose-aware-fregs-lite'", notebook_source)
+        all_notebook_source = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+        )
+        self.assertIn("ImprovedGS + C2F + pose-aware + FreGS-lite", all_notebook_source)
         self.assertIn("'--no-install-recommends', 'colmap'", notebook_source)
         self.assertIn("install_colmap_with_conda", notebook_source)
         self.assertNotIn("'install', '-y', '-qq', 'colmap'", notebook_source)

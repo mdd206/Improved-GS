@@ -23,6 +23,12 @@ from utils.loss_utils import psnr
 from utils.loss_utils import ssim
 from scene.training_context import TrainingContext, activate_training_resolution
 from utils.coarse_to_fine import resolve_training_resolution_scale
+from utils.pose_aware_sampling import (
+    build_pose_sampling_plan,
+    build_repeated_camera_pool,
+    load_test_camera_poses,
+    resolve_test_pose_path,
+)
 
 
 class TrainingLoopState(TypedDict):
@@ -41,6 +47,7 @@ class TrainingLoopState(TypedDict):
     saving_iterations: list[int]
     checkpoint_iterations: list[int]
     training_resolution_scale: float
+    viewpoint_repeat_counts: dict[int, int]
 
 
 def synchronized_timestamp() -> float:
@@ -134,6 +141,33 @@ def build_training_loop_state(
 
     training_resolution_scale = float(runtime_state.get("training_resolution_scale", 1.0))
     train_cameras = list(runtime_state.get("train_cameras") or scene.getTrainCameras(training_resolution_scale))
+    viewpoint_repeat_counts: dict[int, int] = {}
+    if bool(getattr(opt, "pose_aware_sampling", False)):
+        test_pose_path = resolve_test_pose_path(
+            dataset.source_path,
+            str(getattr(opt, "pose_aware_test_poses", "")),
+        )
+        test_poses = load_test_camera_poses(test_pose_path)
+        sampling_plan = build_pose_sampling_plan(
+            train_cameras,
+            test_poses,
+            neighbor_count=int(getattr(opt, "pose_aware_k", 3)),
+            extra_fraction=float(getattr(opt, "pose_aware_extra_fraction", 0.25)),
+            max_repeat=int(getattr(opt, "pose_aware_max_repeat", 2)),
+            angle_weight=float(getattr(opt, "pose_aware_angle_weight", 0.25)),
+        )
+        viewpoint_repeat_counts = sampling_plan.repeat_counts
+        print(
+            "Pose-aware sampling: {} train, {} test, +{} luot/pool {}, "
+            "median spacing {:.3f}, max gap {:.2f}x spacing".format(
+                sampling_plan.train_count,
+                sampling_plan.test_count,
+                sampling_plan.extra_count,
+                sampling_plan.pool_size,
+                sampling_plan.median_train_spacing,
+                sampling_plan.max_test_gap,
+            )
+        )
     return {
         "background": background,
         "log_path": os.path.join(scene.model_path, "log.txt"),
@@ -143,11 +177,12 @@ def build_training_loop_state(
             max_steps=opt.iterations,
         ),
         "report_lpips_model": LPIPS("vgg").to("cuda").eval() if (report_lpips_test or report_lpips_train) else None,
-        "viewpoint_stack": train_cameras.copy(),
+        "viewpoint_stack": build_repeated_camera_pool(train_cameras, viewpoint_repeat_counts),
         "testing_iterations": list(runtime_args.test_iterations),
         "saving_iterations": list(runtime_args.save_iterations),
         "checkpoint_iterations": list(runtime_args.checkpoint_iterations),
         "training_resolution_scale": training_resolution_scale,
+        "viewpoint_repeat_counts": viewpoint_repeat_counts,
     }
 
 
@@ -164,7 +199,9 @@ def update_training_resolution(
 
     train_cameras = activate_training_resolution(context, target_scale)
     loop_state["viewpoint_stack"].clear()
-    loop_state["viewpoint_stack"].extend(train_cameras)
+    loop_state["viewpoint_stack"].extend(
+        build_repeated_camera_pool(train_cameras, loop_state["viewpoint_repeat_counts"])
+    )
     loop_state["training_resolution_scale"] = target_scale
     print("Coarse-to-fine: switched training resolution to 1/{} at iteration {}".format(int(target_scale), iteration))
 
@@ -173,15 +210,21 @@ def sample_training_viewpoint(
     scene: Scene,
     viewpoint_stack: list[Any],
     resolution_scale: float = 1.0,
+    repeat_counts: Optional[dict[int, int]] = None,
 ) -> Any:
     """
-        Draw one random training camera without replacement.
+        Lay ngau nhien mot train camera va xoa khoi pool hien tai.
 
-        When the local pool becomes empty, it is refilled from the scene so each
-        pass sees all training cameras in a random order.
+        Khi pool het, nap lai moi camera it nhat mot lan va them cac ban sao
+        da duoc pose-aware sampling chon.
     """
     if not viewpoint_stack:
-        viewpoint_stack.extend(scene.getTrainCameras(float(resolution_scale)).copy())
+        viewpoint_stack.extend(
+            build_repeated_camera_pool(
+                scene.getTrainCameras(float(resolution_scale)),
+                repeat_counts or {},
+            )
+        )
     random_index = torch.randint(0, len(viewpoint_stack), (1,)).item()
     return viewpoint_stack.pop(random_index)
 
