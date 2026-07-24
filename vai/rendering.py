@@ -172,6 +172,8 @@ def render_vai_scene(
     output_root: str = "",
     eval_root: str = "",
     output_extension: str = "csv",
+    save_png: bool = False,
+    png_root: str = "",
     redistort_interpolation: str = "bicubic",
     sharpen_amount: float = 1.0,
     sharpen_sigma: float = 0.6,
@@ -195,7 +197,15 @@ def render_vai_scene(
     radial_k = float(original_camera["radial_k"])
 
     render_root = Path(output_root) if output_root else model_path / "vai_submission"
+    png_render_root = Path(png_root) if png_root else model_path / "vai_png"
+    if save_png and png_render_root.resolve() == render_root.resolve():
+        raise ValueError("png_root phai khac output_root de dong goi JPEG va PNG rieng")
     scene_output = _prepare_scene_output(render_root, resolved_scene_name, overwrite)
+    png_output = (
+        _prepare_scene_output(png_render_root, resolved_scene_name, overwrite)
+        if save_png
+        else None
+    )
     eval_output_root = Path(eval_root) if eval_root else model_path / "vai_eval"
 
     with torch.no_grad():
@@ -239,6 +249,9 @@ def render_vai_scene(
                 jpeg_quality=jpeg_quality,
                 jpeg_subsampling=jpeg_subsampling,
             )
+            if png_output is not None:
+                png_name = output_name_for_pose(row["image_name"], "png")
+                save_render_image(rendering, png_output / png_name)
             del camera, rendering
 
         manifest = {
@@ -247,6 +260,8 @@ def render_vai_scene(
             "image_count": len(pose_rows),
             "render_dir": str(scene_output),
             "output_extension": output_extension,
+            "save_png": bool(save_png),
+            "png_dir": str(png_output) if png_output is not None else "",
             "redistort_interpolation": redistort_interpolation,
             "sharpen_amount": float(sharpen_amount),
             "sharpen_sigma": float(sharpen_sigma),

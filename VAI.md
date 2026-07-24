@@ -11,9 +11,10 @@ VAI raw scene
   -> ImprovedGS train
   -> render test_poses.csv tren canvas undistort
   -> SIMPLE_RADIAL redistort + crop
-  -> JPEG dung ten CSV, dung kich thuoc
-  -> SSIM / PSNR / LPIPS / weighted score
-  -> validate + ZIP
+  -> sharpen mot lan
+  -> JPEG dung ten CSV + PNG lossless
+  -> SSIM / PSNR / LPIPS / weighted score tren JPEG
+  -> validate + ZIP JPEG rieng + ZIP PNG rieng
 ```
 
 `3dgs-origin` khong duoc import hay sua doi. Tat ca code VAI moi nam trong package `vai/` va cac CLI `vai_*.py` cua repository nay.
@@ -56,7 +57,7 @@ python vai_preprocess.py \
 
 Khi chay notebook Kaggle, sua truc tiep dictionary `VAI_CONFIG` trong cell co tag
 `parameters`. Notebook ghi dictionary nay thanh
-`/kaggle/working/vai_hcm0204.runtime.json`; dry-run va train deu dung file runtime do,
+`/kaggle/working/vai_<set_name>.runtime.json`; dry-run va train deu dung file runtime do,
 khong doc config HCM0204 trong source repo. File
 [configs/vai_hcm0204.json](configs/vai_hcm0204.json) chi la template cho cach chay CLI
 ngoai notebook.
@@ -69,11 +70,13 @@ Config mac dinh trong notebook da dat:
 - `eval=false` de dung toan bo 240 anh train, khong LLFF-hold anh.
 - `data_device=cpu` de 240 anh va edge map khong chiem bo nho GPU Kaggle.
 - `postprocess_script=vai_render.py`.
-- Render JPEG theo dung ten `.JPG` trong CSV vao `/kaggle/working/vai_renders/HCM0204`.
+- Render JPEG theo dung ten `.JPG` trong CSV vao `/kaggle/working/vai_renders/<set>/<scene>`.
+- Neu `save_png=true`, luu them PNG lossless vao
+  `/kaggle/working/vai_png/<set>/<scene>`.
 - Redistort bang bicubic interpolation.
 - Unsharp mask voi `amount=1.0`, `sigma=0.60`.
 - Luu JPEG voi `quality=95`, `subsampling=2` (4:2:0).
-- Danh gia public GT vao `/kaggle/working/vai_eval/HCM0204.json`.
+- Danh gia public GT vao `/kaggle/working/vai_eval/<set>/<scene>.json`.
 - Ghi summary tuong thich batch runner vao `result_test.json` cua model.
 
 Kiem tra command truoc:
@@ -97,6 +100,8 @@ python vai_render.py \
   --output_root /kaggle/working/vai_renders \
   --eval_root /kaggle/working/vai_eval \
   --output_extension csv \
+  --save_png true \
+  --png_root /kaggle/working/vai_png \
   --redistort_interpolation bicubic \
   --sharpen_amount 1.0 \
   --sharpen_sigma 0.60 \
@@ -107,7 +112,8 @@ python vai_render.py \
   --overwrite true
 ```
 
-Voi private set khong co ground truth, dat `require_gt=false`. Renderer van sinh day du anh va bo qua evaluation.
+Voi private set khong co ground truth, dat `evaluate=false` va `require_gt=false`.
+Renderer van sinh day du JPEG va PNG.
 
 ## 4. Danh gia lai anh co san
 
@@ -137,13 +143,43 @@ python vai_package.py \
   --zip_path /kaggle/working/HCM0204_render.zip \
   --subset HCM0204 \
   --output_extension csv
+
+python vai_package.py \
+  --phase_dir /kaggle/input/datasets/xuanph/phase1/phase1 \
+  --set_name public_set \
+  --submission_dir /kaggle/working/vai_png \
+  --zip_path /kaggle/working/public_set_png.zip \
+  --subset HCM0204 \
+  --output_extension png
 ```
 
-Tool se tu choi tao ZIP neu thieu anh, sai kich thuoc, sai ten hoac co file thua trong thu muc scene. ZIP chi chua cac file da duoc doi chieu voi `test_poses.csv`.
+Tool se tu choi tao ZIP neu thieu anh, sai kich thuoc, sai ten hoac co file thua
+trong thu muc scene. JPEG va PNG nam trong hai root rieng, nen moi ZIP chi chua
+dung dinh dang da duoc doi chieu voi `test_poses.csv`.
 
 ## 6. Notebook Kaggle
 
-[notebooks/vai_hcm0204.ipynb](notebooks/vai_hcm0204.ipynb) gom cac cell clone, cai dependency, preprocess, dry-run, train/render/evaluate va dong goi hai file ZIP render/evaluation.
+[notebooks/vai_hcm0204.ipynb](notebooks/vai_hcm0204.ipynb) gom cac cell clone, cai
+dependency, preprocess, dry-run, train/render/evaluate va dong goi ZIP JPEG,
+ZIP PNG va evaluation.
+
+Tat ca lua chon dataset/scene nam trong cell `parameters`:
+
+```python
+SET_NAME = "public_set"
+SCENE_NAMES = ["HCM0204"]                 # mot scene
+SCENE_NAMES = ["HCM0204", "SCENE_KHAC"]  # nhieu scene
+SCENE_NAMES = []                          # tat ca scene trong set
+EVALUATE = SET_NAME == "public_set"
+REQUIRE_GT = EVALUATE
+SAVE_PNG = True
+```
+
+De chay private, doi `SET_NAME` thanh ten thu muc private, vi du
+`private_set1`. Notebook tu tao `VAI_CONFIG["scenes"]`, preprocess dung danh
+sach da chon, batch runner train/render tung scene, va package chung cac scene
+vao `public_set_jpeg.zip` va `public_set_png.zip` (ten thay doi theo `SET_NAME`).
+Public set tao them ZIP evaluation; private set bo qua evaluation.
 
 De thay doi iterations, budget Gaussian, duong dan output, tham so sharpen, JPEG,
 evaluation hoac cac train/render argument khac, chi sua cell `VAI_CONFIG` o dau

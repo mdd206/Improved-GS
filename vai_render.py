@@ -17,6 +17,8 @@ def main() -> int:
     parser.add_argument("--output_root", default="")
     parser.add_argument("--eval_root", default="")
     parser.add_argument("--output_extension", default="csv")
+    parser.add_argument("--save_png", default=False, nargs="?", const=True, type=parse_bool_arg)
+    parser.add_argument("--png_root", default="")
     parser.add_argument(
         "--redistort_interpolation",
         default="bicubic",
@@ -45,6 +47,8 @@ def main() -> int:
         output_root=args.output_root,
         eval_root=args.eval_root,
         output_extension=args.output_extension,
+        save_png=args.save_png,
+        png_root=args.png_root,
         redistort_interpolation=args.redistort_interpolation,
         sharpen_amount=args.sharpen_amount,
         sharpen_sigma=args.sharpen_sigma,

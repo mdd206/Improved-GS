@@ -400,6 +400,24 @@ class ImageProcessingTests(unittest.TestCase):
                 self.assertEqual(saved_image.format, "JPEG")
                 self.assertEqual(JpegImagePlugin.get_sampling(saved_image), 2)
 
+    def test_png_is_saved_losslessly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "sample.png"
+            pixels = torch.tensor(
+                [
+                    [[0, 64], [128, 255]],
+                    [[255, 128], [64, 0]],
+                    [[32, 96], [160, 224]],
+                ],
+                dtype=torch.float32,
+            )
+            image = pixels / 255.0
+            save_render_image(image, output_path)
+            with PilImage.open(output_path) as saved_image:
+                self.assertEqual(saved_image.format, "PNG")
+                saved = np.asarray(saved_image)
+            np.testing.assert_array_equal(saved, pixels.permute(1, 2, 0).numpy().astype(np.uint8))
+
     def test_hcm0204_notebook_owns_runtime_config(self) -> None:
         notebook_path = Path(__file__).resolve().parents[1] / "notebooks" / "vai_hcm0204.ipynb"
         with open(notebook_path, encoding="utf-8") as handle:
@@ -415,7 +433,9 @@ class ImageProcessingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             work_root = Path(temp_dir)
             phase_dir = work_root / "phase1"
-            (phase_dir / "public_set" / "HCM0204").mkdir(parents=True)
+            public_pose = phase_dir / "public_set" / "HCM0204" / "test" / "test_poses.csv"
+            public_pose.parent.mkdir(parents=True)
+            public_pose.touch()
             namespace = {
                 "PHASE_DIR": phase_dir,
                 "WORK_ROOT": work_root,
@@ -429,6 +449,35 @@ class ImageProcessingTests(unittest.TestCase):
             with open(runtime_path, encoding="utf-8") as handle:
                 saved_config = json.load(handle)
             self.assertEqual(saved_config, config)
+
+            private_root = phase_dir / "private_set1"
+            for scene_name in ("PRIVATE_A", "PRIVATE_B"):
+                pose_path = private_root / scene_name / "test" / "test_poses.csv"
+                pose_path.parent.mkdir(parents=True)
+                pose_path.touch()
+            private_source = config_cells[0].replace(
+                "SET_NAME = 'public_set'",
+                "SET_NAME = 'private_set1'",
+            ).replace(
+                "SCENE_NAMES = ['HCM0204']",
+                "SCENE_NAMES = ['PRIVATE_A', 'PRIVATE_B']",
+            )
+            private_namespace = {
+                "PHASE_DIR": phase_dir,
+                "WORK_ROOT": work_root,
+                "json": json,
+                "sys": sys,
+            }
+            with patch("builtins.print"):
+                exec(private_source, private_namespace)
+            private_config = private_namespace["VAI_CONFIG"]
+            self.assertEqual(
+                [scene["name"] for scene in private_config["scenes"]],
+                ["PRIVATE_A", "PRIVATE_B"],
+            )
+            self.assertFalse(private_config["postprocess_args"]["evaluate"])
+            self.assertFalse(private_config["postprocess_args"]["require_gt"])
+            self.assertIn("private_set1", private_config["data_root"])
 
         render_config = config["postprocess_args"]
         train_config = config["train_args"]
@@ -446,8 +495,23 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["jpeg_quality"], 95)
         self.assertEqual(render_config["jpeg_subsampling"], 2)
         self.assertEqual(render_config["output_extension"], "csv")
+        self.assertTrue(render_config["save_png"])
+        self.assertIn("public_set", render_config["png_root"])
         notebook_source = "\n".join(code_cells)
-        self.assertIn("REPO_BRANCH = 'agent/pose-aware-sampling'", notebook_source)
+        self.assertIn("REPO_BRANCH = 'main'", notebook_source)
+        all_notebook_source = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+        )
+        self.assertIn("ImprovedGS + C2F + pose-aware cho VAI public/private", all_notebook_source)
+        self.assertIn("SCENE_NAMES = ['HCM0204']", notebook_source)
+        self.assertIn("'--subset', *SELECTED_SCENES", notebook_source)
+        self.assertIn("f'{SET_NAME}_jpeg.zip'", notebook_source)
+        self.assertIn("f'{SET_NAME}_png.zip'", notebook_source)
+        self.assertGreaterEqual(notebook_source.count("'vai_package.py'"), 2)
+        self.assertIn("'--no-install-recommends', 'colmap'", notebook_source)
+        self.assertIn("install_colmap_with_conda", notebook_source)
+        self.assertNotIn("'install', '-y', '-qq', 'colmap'", notebook_source)
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 
@@ -463,7 +527,7 @@ class EdgeMaskTests(unittest.TestCase):
 
 
 class PackagingTests(unittest.TestCase):
-    def test_package_contains_only_validated_scene_files(self) -> None:
+    def test_jpeg_and_png_are_packaged_into_separate_archives(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             phase_dir = root / "phase1"
@@ -492,20 +556,37 @@ class PackagingTests(unittest.TestCase):
                 writer.writerow(row)
             self.assertEqual(len(read_pose_rows(pose_path)), 1)
 
-            render_dir = root / "renders" / "HCM0204"
-            render_dir.mkdir(parents=True)
-            PilImage.new("RGB", (4, 3), (10, 20, 30)).save(render_dir / "sample.png")
-            zip_path = root / "submission.zip"
-            counts = package_submission(
+            jpeg_dir = root / "jpeg" / "HCM0204"
+            png_dir = root / "png" / "HCM0204"
+            jpeg_dir.mkdir(parents=True)
+            png_dir.mkdir(parents=True)
+            image = PilImage.new("RGB", (4, 3), (10, 20, 30))
+            image.save(jpeg_dir / "sample.JPG")
+            image.save(png_dir / "sample.png")
+
+            jpeg_zip = root / "jpeg.zip"
+            jpeg_counts = package_submission(
                 phase_dir=phase_dir,
                 set_name="public_set",
-                submission_root=root / "renders",
-                zip_path=zip_path,
+                submission_root=root / "jpeg",
+                zip_path=jpeg_zip,
+                subset=["HCM0204"],
+                output_extension="csv",
+            )
+            png_zip = root / "png.zip"
+            png_counts = package_submission(
+                phase_dir=phase_dir,
+                set_name="public_set",
+                submission_root=root / "png",
+                zip_path=png_zip,
                 subset=["HCM0204"],
                 output_extension="png",
             )
-            self.assertEqual(counts, {"HCM0204": 1})
-            with zipfile.ZipFile(zip_path) as archive:
+            self.assertEqual(jpeg_counts, {"HCM0204": 1})
+            self.assertEqual(png_counts, {"HCM0204": 1})
+            with zipfile.ZipFile(jpeg_zip) as archive:
+                self.assertEqual(archive.namelist(), ["HCM0204/sample.JPG"])
+            with zipfile.ZipFile(png_zip) as archive:
                 self.assertEqual(archive.namelist(), ["HCM0204/sample.png"])
 
 
