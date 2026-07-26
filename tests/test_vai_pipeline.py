@@ -153,10 +153,11 @@ class PoseAwareSamplingTests(unittest.TestCase):
         plan = build_pose_sampling_plan(
             cameras,
             test_poses,
-            neighbor_count=1,
+            position_neighbor_count=1,
+            direction_neighbor_count=1,
+            direction_radius=3.0,
             extra_fraction=0.25,
             max_repeat=2,
-            angle_weight=0.25,
         )
 
         self.assertEqual(plan.repeat_counts, {0: 1, 1: 1, 2: 1, 3: 2})
@@ -164,6 +165,7 @@ class PoseAwareSamplingTests(unittest.TestCase):
         self.assertEqual(plan.pool_size, 5)
         self.assertAlmostEqual(plan.median_train_spacing, 1.0)
         self.assertAlmostEqual(plan.max_test_gap, 2.0)
+        self.assertAlmostEqual(plan.max_test_angle_gap_degrees, 0.0)
         pool = build_repeated_camera_pool(cameras, plan.repeat_counts)
         self.assertEqual(len(pool), 5)
         self.assertTrue(all(any(item is camera for item in pool) for camera in cameras))
@@ -182,13 +184,42 @@ class PoseAwareSamplingTests(unittest.TestCase):
         plan = build_pose_sampling_plan(
             cameras,
             test_poses,
-            neighbor_count=1,
+            position_neighbor_count=1,
+            direction_neighbor_count=1,
+            direction_radius=3.0,
             extra_fraction=0.5,
             max_repeat=2,
-            angle_weight=0.25,
         )
 
         self.assertEqual(plan.repeat_counts, {0: 2, 1: 1})
+
+    def test_direction_neighbor_stays_inside_position_radius(self) -> None:
+        cameras = [
+            SimpleNamespace(uid=0, camera_center=np.array([0.0, 0.0, 0.0]), R=np.eye(3)),
+            SimpleNamespace(
+                uid=1,
+                camera_center=np.array([1.0, 0.0, 0.0]),
+                R=np.diag([-1.0, 1.0, -1.0]),
+            ),
+            SimpleNamespace(
+                uid=2,
+                camera_center=np.array([2.0, 0.0, 0.0]),
+                R=np.diag([-1.0, 1.0, -1.0]),
+            ),
+            SimpleNamespace(uid=3, camera_center=np.array([10.0, 0.0, 0.0]), R=np.eye(3)),
+        ]
+        test_poses = [CameraPose(center=np.array([1.1, 0.0, 0.0]), forward=np.array([0.0, 0.0, 1.0]))]
+        plan = build_pose_sampling_plan(
+            cameras,
+            test_poses,
+            position_neighbor_count=1,
+            direction_neighbor_count=1,
+            direction_radius=3.0,
+            extra_fraction=0.5,
+            max_repeat=2,
+        )
+
+        self.assertEqual(plan.repeat_counts, {0: 2, 1: 2, 2: 1, 3: 1})
 
 
 class ColmapIoTests(unittest.TestCase):
@@ -485,10 +516,12 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(train_config["coarse_to_fine_middle_iter"], 2000)
         self.assertEqual(train_config["coarse_to_fine_full_iter"], 5000)
         self.assertTrue(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["pose_aware_k"], 3)
+        self.assertEqual(train_config["pose_aware_position_k"], 2)
+        self.assertEqual(train_config["pose_aware_direction_k"], 2)
+        self.assertEqual(train_config["pose_aware_direction_radius"], 3.0)
         self.assertEqual(train_config["pose_aware_extra_fraction"], 0.25)
         self.assertEqual(train_config["pose_aware_max_repeat"], 2)
-        self.assertEqual(train_config["pose_aware_angle_weight"], 0.25)
+        self.assertEqual(train_config["budget"], 4_000_000)
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -498,12 +531,12 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertTrue(render_config["save_png"])
         self.assertIn("public_set", render_config["png_root"])
         notebook_source = "\n".join(code_cells)
-        self.assertIn("REPO_BRANCH = 'main'", notebook_source)
+        self.assertIn("REPO_BRANCH = 'agent/pose-aware-sampling'", notebook_source)
         all_notebook_source = "\n".join(
             "".join(cell.get("source", []))
             for cell in notebook["cells"]
         )
-        self.assertIn("ImprovedGS + C2F + pose-aware cho VAI public/private", all_notebook_source)
+        self.assertIn("ImprovedGS + C2F + pose-aware v2 cho VAI public/private", all_notebook_source)
         self.assertIn("SCENE_NAMES = ['HCM0204']", notebook_source)
         self.assertIn("'--subset', *SELECTED_SCENES", notebook_source)
         self.assertIn("f'{SET_NAME}_jpeg.zip'", notebook_source)

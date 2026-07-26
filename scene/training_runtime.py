@@ -151,21 +151,23 @@ def build_training_loop_state(
         sampling_plan = build_pose_sampling_plan(
             train_cameras,
             test_poses,
-            neighbor_count=int(getattr(opt, "pose_aware_k", 3)),
+            position_neighbor_count=int(getattr(opt, "pose_aware_position_k", 2)),
+            direction_neighbor_count=int(getattr(opt, "pose_aware_direction_k", 2)),
+            direction_radius=float(getattr(opt, "pose_aware_direction_radius", 3.0)),
             extra_fraction=float(getattr(opt, "pose_aware_extra_fraction", 0.25)),
             max_repeat=int(getattr(opt, "pose_aware_max_repeat", 2)),
-            angle_weight=float(getattr(opt, "pose_aware_angle_weight", 0.25)),
         )
         viewpoint_repeat_counts = sampling_plan.repeat_counts
         print(
             "Pose-aware sampling: {} train, {} test, +{} luot/pool {}, "
-            "median spacing {:.3f}, max gap {:.2f}x spacing".format(
+            "median spacing {:.3f}, max gap {:.2f}x spacing, max angle {:.1f} deg".format(
                 sampling_plan.train_count,
                 sampling_plan.test_count,
                 sampling_plan.extra_count,
                 sampling_plan.pool_size,
                 sampling_plan.median_train_spacing,
                 sampling_plan.max_test_gap,
+                sampling_plan.max_test_angle_gap_degrees,
             )
         )
     return {

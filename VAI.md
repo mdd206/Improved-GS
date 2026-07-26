@@ -66,7 +66,8 @@ Config mac dinh trong notebook da dat:
 
 - `training_method=improvedgs`.
 - `coarse_to_fine=true`: train 1/4 resolution den iteration 2.000, 1/2 den 5.000, sau do dung full resolution.
-- `pose_aware_sampling=true`: giu moi train camera mot lan va lap them toi da mot lan cho khoang 25% camera gan cac test pose thua coverage.
+- `pose_aware_sampling=true`: giu moi train camera mot lan, chon rieng 2 camera gan vi tri va 2 camera gan huong nhin trong ban kinh 3 camera-spacing, roi lap them toi da mot lan cho khoang 25% camera.
+- `budget=4000000` cho thi nghiem pose-aware v2.
 - `eval=false` de dung toan bo 240 anh train, khong LLFF-hold anh.
 - `data_device=cpu` de 240 anh va edge map khong chiem bo nho GPU Kaggle.
 - `postprocess_script=vai_render.py`.

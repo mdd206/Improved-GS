@@ -1,4 +1,4 @@
-"""Tao camera pool uu tien cac train view gan test pose thieu coverage."""
+"""Tao camera pool v2 tach coverage vi tri va huong nhin cua test pose."""
 from __future__ import annotations
 
 import csv
@@ -24,6 +24,7 @@ class PoseSamplingPlan:
     pool_size: int
     median_train_spacing: float
     max_test_gap: float
+    max_test_angle_gap_degrees: float
 
 
 def _normalize_vector(value: np.ndarray) -> np.ndarray:
@@ -110,24 +111,27 @@ def _median_train_spacing(centers: np.ndarray) -> float:
 def build_pose_sampling_plan(
     train_cameras: list[Any],
     test_poses: list[CameraPose],
-    neighbor_count: int = 3,
+    position_neighbor_count: int = 2,
+    direction_neighbor_count: int = 2,
+    direction_radius: float = 3.0,
     extra_fraction: float = 0.25,
     max_repeat: int = 2,
-    angle_weight: float = 0.25,
 ) -> PoseSamplingPlan:
-    """Chon train camera duoc lap them dua tren khoang cach va goc test pose."""
+    """Chon rieng train camera gan vi tri va gan huong nhin cua test pose."""
     if not train_cameras:
         raise ValueError("Pose-aware sampling requires at least one training camera.")
     if not test_poses:
         raise ValueError("Pose-aware sampling requires at least one test pose.")
-    if int(neighbor_count) < 1:
-        raise ValueError("pose_aware_k must be at least 1.")
+    if int(position_neighbor_count) < 1:
+        raise ValueError("pose_aware_position_k must be at least 1.")
+    if int(direction_neighbor_count) < 1:
+        raise ValueError("pose_aware_direction_k must be at least 1.")
+    if float(direction_radius) <= 0.0:
+        raise ValueError("pose_aware_direction_radius must be positive.")
     if not (0.0 <= float(extra_fraction) <= 1.0):
         raise ValueError("pose_aware_extra_fraction must be in [0, 1].")
     if int(max_repeat) < 1:
         raise ValueError("pose_aware_max_repeat must be at least 1.")
-    if float(angle_weight) < 0.0:
-        raise ValueError("pose_aware_angle_weight must be non-negative.")
 
     train_poses = [pose_from_training_camera(camera) for camera in train_cameras]
     train_centers = np.stack([pose.center for pose in train_poses])
@@ -140,16 +144,36 @@ def build_pose_sampling_plan(
     normalized_distances = position_distances / median_spacing
     direction_dots = np.clip(test_forwards @ train_forwards.T, -1.0, 1.0)
     angle_distances = np.arccos(direction_dots) / np.deg2rad(30.0)
-    combined_cost = normalized_distances + float(angle_weight) * angle_distances
 
-    k = min(int(neighbor_count), len(train_cameras))
+    position_k = min(int(position_neighbor_count), len(train_cameras))
+    direction_k = min(int(direction_neighbor_count), len(train_cameras))
     importance = np.zeros((len(train_cameras),), dtype=np.float64)
     nearest_gaps = np.min(normalized_distances, axis=1)
+    nearest_position_indices = np.argmin(normalized_distances, axis=1)
+    nearest_angle_gaps = angle_distances[np.arange(len(test_poses)), nearest_position_indices]
     for test_index in range(len(test_poses)):
-        nearest_indices = np.argsort(combined_cost[test_index], kind="stable")[:k]
-        difficulty = float(np.clip(nearest_gaps[test_index], 0.25, 5.0))
-        for rank, train_index in enumerate(nearest_indices):
-            importance[train_index] += difficulty / float(rank + 1)
+        # Nhom vi tri luon ton tai, ke ca khi test pose nam ngoai coverage.
+        position_indices = np.argsort(normalized_distances[test_index], kind="stable")[:position_k]
+        position_difficulty = float(np.clip(nearest_gaps[test_index], 0.25, 5.0))
+        for rank, train_index in enumerate(position_indices):
+            importance[train_index] += position_difficulty / float(rank + 1)
+
+        # Nhom huong nhin chi chon camera trong ban kinh co the noi suy hop ly.
+        direction_candidates = np.flatnonzero(
+            normalized_distances[test_index] <= float(direction_radius)
+        )
+        if direction_candidates.size == 0:
+            continue
+        candidate_order = np.lexsort(
+            (
+                normalized_distances[test_index, direction_candidates],
+                angle_distances[test_index, direction_candidates],
+            )
+        )
+        direction_indices = direction_candidates[candidate_order[:direction_k]]
+        direction_difficulty = float(np.clip(nearest_angle_gaps[test_index], 0.25, 5.0))
+        for rank, train_index in enumerate(direction_indices):
+            importance[train_index] += direction_difficulty / float(rank + 1)
 
     repeat_counts = {
         int(getattr(camera, "uid", index)): 1
@@ -182,6 +206,7 @@ def build_pose_sampling_plan(
         pool_size=len(train_cameras) + extra_count,
         median_train_spacing=median_spacing,
         max_test_gap=float(nearest_gaps.max()),
+        max_test_angle_gap_degrees=float(nearest_angle_gaps.max() * 30.0),
     )
 
 
