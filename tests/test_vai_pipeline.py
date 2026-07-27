@@ -39,7 +39,7 @@ from vai.colmap_io import (
     write_points3d_binary,
 )
 from vai.common import output_name_for_pose, read_pose_rows
-from vai.distortion import redistort_and_crop, redistort_image
+from vai.distortion import redistort_image
 from vai.evaluation import compute_weighted_score
 from vai.image_processing import save_render_image, sharpen_image
 from vai.packaging import package_submission
@@ -743,40 +743,90 @@ class GaussianModelIOTests(unittest.TestCase):
 class DistortionTests(unittest.TestCase):
     def test_zero_distortion_is_identity(self) -> None:
         image = torch.rand((3, 5, 7), dtype=torch.float32)
-        output = redistort_image(image, focal=20.0, cx=3.0, cy=2.0, radial_k=0.0)
+        output = redistort_image(
+            image,
+            source_fx=20.0,
+            source_fy=20.0,
+            source_cx=3.5,
+            source_cy=2.5,
+            target_focal=20.0,
+            target_cx=3.5,
+            target_cy=2.5,
+            target_width=7,
+            target_height=5,
+            radial_k=0.0,
+        )
         torch.testing.assert_close(output, image, atol=1e-6, rtol=1e-6)
 
-    def test_crop_uses_principal_point_offset(self) -> None:
-        image = torch.arange(3 * 8 * 10, dtype=torch.float32).reshape(3, 8, 10)
-        output = redistort_and_crop(
+    def test_uses_distinct_source_and_target_intrinsics(self) -> None:
+        x_ramp = torch.arange(9, dtype=torch.float32).view(1, 1, 9)
+        image = x_ramp.expand(3, 5, 9).clone()
+        output = redistort_image(
             image,
-            focal=20.0,
-            render_cx=5.0,
-            render_cy=4.0,
+            source_fx=10.0,
+            source_fy=20.0,
+            source_cx=4.5,
+            source_cy=2.5,
+            target_focal=20.0,
+            target_cx=2.5,
+            target_cy=2.5,
+            target_width=5,
+            target_height=5,
             radial_k=0.0,
-            target_cx=3.0,
-            target_cy=2.0,
-            target_width=6,
-            target_height=4,
+            interpolation="bilinear",
         )
-        torch.testing.assert_close(output, image[:, 2:6, 2:8], atol=1e-5, rtol=1e-5)
+        expected = torch.tensor([3.0, 3.5, 4.0, 4.5, 5.0]).view(1, 1, 5)
+        expected = expected.expand(3, 5, 5)
+        torch.testing.assert_close(output, expected, atol=1e-6, rtol=1e-6)
+
+    def test_inverts_simple_radial_radius(self) -> None:
+        image = torch.arange(5, dtype=torch.float32).view(1, 1, 5)
+        output = redistort_image(
+            image,
+            source_fx=10.0,
+            source_fy=10.0,
+            source_cx=0.5,
+            source_cy=0.5,
+            target_focal=10.0,
+            target_cx=0.48,
+            target_cy=0.5,
+            target_width=3,
+            target_height=1,
+            radial_k=0.25,
+            interpolation="bilinear",
+        )
+        # ru=0.2 -> rd=ru*(1 + 0.25*ru^2)=0.202. Pixel x=2 co
+        # toa do distorted (2.5 - 0.48)/10=0.202 va phai lay source x=2.
+        self.assertAlmostEqual(float(output[0, 0, 2]), 2.0, places=5)
 
     def test_bicubic_interpolation_differs_from_bilinear(self) -> None:
         image = torch.zeros((3, 9, 9), dtype=torch.float32)
         image[:, 4, 4] = 1.0
         bicubic = redistort_image(
             image,
-            focal=8.0,
-            cx=4.0,
-            cy=4.0,
+            source_fx=8.0,
+            source_fy=8.0,
+            source_cx=4.5,
+            source_cy=4.5,
+            target_focal=8.0,
+            target_cx=4.5,
+            target_cy=4.5,
+            target_width=9,
+            target_height=9,
             radial_k=0.1,
             interpolation="bicubic",
         )
         bilinear = redistort_image(
             image,
-            focal=8.0,
-            cx=4.0,
-            cy=4.0,
+            source_fx=8.0,
+            source_fy=8.0,
+            source_cx=4.5,
+            source_cy=4.5,
+            target_focal=8.0,
+            target_cx=4.5,
+            target_cy=4.5,
+            target_width=9,
+            target_height=9,
             radial_k=0.1,
             interpolation="bilinear",
         )
@@ -896,22 +946,16 @@ class ImageProcessingTests(unittest.TestCase):
 
         render_config = config["postprocess_args"]
         train_config = config["train_args"]
-        self.assertEqual(train_config["iterations"], 60000)
-        self.assertEqual(train_config["save_iterations"], [30000, 45000, 60000])
+        self.assertEqual(train_config["iterations"], 30000)
+        self.assertEqual(train_config["save_iterations"], [30000])
         self.assertEqual(train_config["position_lr_max_steps"], 30000)
-        self.assertTrue(train_config["coarse_to_fine"])
-        self.assertEqual(train_config["coarse_to_fine_middle_iter"], 2000)
-        self.assertEqual(train_config["coarse_to_fine_full_iter"], 5000)
-        self.assertTrue(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["pose_aware_mode"], "v1")
-        self.assertEqual(train_config["pose_aware_k"], 3)
-        self.assertEqual(train_config["pose_aware_angle_weight"], 0.25)
-        self.assertEqual(train_config["pose_aware_extra_fraction"], 0.25)
-        self.assertEqual(train_config["pose_aware_max_repeat"], 2)
-        self.assertEqual(train_config["densify_grad_threshold"], 0.00020)
+        self.assertFalse(train_config["coarse_to_fine"])
+        self.assertFalse(train_config["pose_aware_sampling"])
+        self.assertNotIn("pose_aware_mode", train_config)
+        self.assertEqual(train_config["densify_grad_threshold"], 0.0025)
         self.assertEqual(train_config["budget"], 5_500_000)
         self.assertIn("vai_cleaned_no_p1", config["data_root"])
-        self.assertIn("pose_aware_60k_5m5", config["output_root"])
+        self.assertIn("d0_redistort_improvedgs_30k_5m5_dense0025", config["output_root"])
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -920,10 +964,10 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["output_extension"], "csv")
         self.assertTrue(render_config["save_png"])
         self.assertIn("public_set", render_config["png_root"])
-        self.assertIn("pose_aware_60k_5m5", render_config["png_root"])
+        self.assertIn("d0_redistort_improvedgs_30k_5m5_dense0025", render_config["png_root"])
         notebook_source = "\n".join(code_cells)
         self.assertIn(
-            "REPO_BRANCH = 'agent/pose-aware-60k-5m5'",
+            "REPO_BRANCH = 'agent/d0-redistort-improvedgs-5m5'",
             notebook_source,
         )
         self.assertIn(
@@ -939,7 +983,7 @@ class ImageProcessingTests(unittest.TestCase):
             for cell in notebook["cells"]
         )
         self.assertIn(
-            "ImprovedGS + C2F + pose-aware v1, dense 0.0002, 60k, budget 5.5M",
+            "D0: correct two-intrinsics redistort + ImprovedGS, dense 0.0025, 30k, budget 5.5M",
             all_notebook_source,
         )
         self.assertIn("SCENE_NAMES = ['HCM0204']", notebook_source)
@@ -963,21 +1007,23 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 
-    def test_hcm0204_template_matches_pose_aware_60k_experiment(self) -> None:
+    def test_hcm0204_template_matches_d0_improvedgs_experiment(self) -> None:
         config_path = Path(__file__).resolve().parents[1] / "configs" / "vai_hcm0204.json"
         with open(config_path, encoding="utf-8") as handle:
             config = json.load(handle)
 
         train_config = config["train_args"]
-        self.assertEqual(train_config["iterations"], 60000)
-        self.assertEqual(train_config["save_iterations"], [30000, 45000, 60000])
+        self.assertEqual(train_config["training_method"], "improvedgs")
+        self.assertEqual(train_config["iterations"], 30000)
+        self.assertEqual(train_config["save_iterations"], [30000])
         self.assertEqual(train_config["position_lr_max_steps"], 30000)
-        self.assertTrue(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["pose_aware_mode"], "v1")
-        self.assertEqual(train_config["densify_grad_threshold"], 0.00020)
+        self.assertFalse(train_config["coarse_to_fine"])
+        self.assertFalse(train_config["pose_aware_sampling"])
+        self.assertNotIn("pose_aware_mode", train_config)
+        self.assertEqual(train_config["densify_grad_threshold"], 0.0025)
         self.assertEqual(train_config["budget"], 5_500_000)
         self.assertIn("vai_cleaned_no_p1", config["data_root"])
-        self.assertIn("pose_aware_60k_5m5", config["output_root"])
+        self.assertIn("d0_redistort_improvedgs_30k_5m5_dense0025", config["output_root"])
 
 
 class EdgeMaskTests(unittest.TestCase):

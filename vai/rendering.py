@@ -22,7 +22,7 @@ from vai.common import (
     save_json,
 )
 from vai.evaluation import evaluate_rendered_scene
-from vai.distortion import redistort_and_crop
+from vai.distortion import redistort_image
 from vai.image_processing import save_render_image, sharpen_image
 
 
@@ -39,8 +39,6 @@ def _single_undistorted_camera(source_path: Path) -> Any:
         fx = fy = focal
     else:
         raise ValueError(f"Camera render phai la PINHOLE, nhan duoc {camera.model}")
-    if abs(fx - fy) > 1e-3:
-        raise ValueError(f"VAI redistort yeu cau fx gan bang fy, nhan duoc {fx} va {fy}")
     return {
         "model": camera.model,
         "width": int(camera.width),
@@ -225,16 +223,18 @@ def render_vai_scene(
                 track_gradients=False,
                 inference_only=True,
             )["render"]
-            rendering = redistort_and_crop(
+            rendering = redistort_image(
                 rendering,
-                focal=float(undistorted_camera["fx"]),
-                render_cx=float(undistorted_camera["cx"]),
-                render_cy=float(undistorted_camera["cy"]),
-                radial_k=radial_k,
+                source_fx=float(undistorted_camera["fx"]),
+                source_fy=float(undistorted_camera["fy"]),
+                source_cx=float(undistorted_camera["cx"]),
+                source_cy=float(undistorted_camera["cy"]),
+                target_focal=float(row["fx"]),
                 target_cx=float(row["cx"]),
                 target_cy=float(row["cy"]),
                 target_width=int(float(row["width"])),
                 target_height=int(float(row["height"])),
+                radial_k=radial_k,
                 interpolation=redistort_interpolation,
             )
             rendering = sharpen_image(
@@ -267,7 +267,9 @@ def render_vai_scene(
             "sharpen_sigma": float(sharpen_sigma),
             "jpeg_quality": int(jpeg_quality),
             "jpeg_subsampling": int(jpeg_subsampling),
+            "redistort_model": "simple_radial_two_intrinsics_v1",
             "radial_k": radial_k,
+            "original_camera": original_camera,
             "undistorted_camera": undistorted_camera,
         }
         save_json(model_path / "vai_render.json", manifest)
