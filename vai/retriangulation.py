@@ -1,6 +1,7 @@
 """Tai tam giac hoa sparse point voi pose COLMAP duoc giu co dinh."""
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -21,10 +22,24 @@ from vai.colmap_io import (
 )
 
 
+def colmap_environment() -> dict[str, str]:
+    """Tao environment Qt headless cho COLMAP tren Kaggle."""
+    environment = os.environ.copy()
+    if not environment.get("DISPLAY"):
+        environment["QT_QPA_PLATFORM"] = "offscreen"
+    return environment
+
+
 def _run_colmap(command: list[str], stage: str) -> None:
     """Chay mot buoc COLMAP va gom loi thanh thong bao de doc."""
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=colmap_environment(),
+        )
     except subprocess.CalledProcessError as error:
         details = (error.stderr or error.stdout or "").strip()
         raise RuntimeError(f"COLMAP {stage} that bai:\n{details}") from error
@@ -365,6 +380,7 @@ def build_fixed_pose_point_cloud(
             check=False,
             capture_output=True,
             text=True,
+            env=colmap_environment(),
         )
         help_text = (help_result.stdout or "") + (help_result.stderr or "")
         if "--Mapper.tri_ignore_two_view_tracks" in help_text:

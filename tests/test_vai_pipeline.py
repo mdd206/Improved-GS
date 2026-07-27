@@ -34,7 +34,7 @@ from vai.evaluation import compute_weighted_score
 from vai.image_processing import save_render_image, sharpen_image
 from vai.packaging import package_submission
 from vai.preprocessing import _synchronize_and_filter_images, preprocess_scene
-from vai.retriangulation import merge_sparse_points
+from vai.retriangulation import _run_colmap, merge_sparse_points
 from utils.coarse_to_fine import (
     build_training_resolution_scales,
     resolve_training_resolution_scale,
@@ -312,6 +312,17 @@ class ColmapIoTests(unittest.TestCase):
 
 
 class RetriangulationTests(unittest.TestCase):
+    def test_colmap_uses_qt_offscreen_without_display(self) -> None:
+        with patch.dict("vai.retriangulation.os.environ", {}, clear=True), patch(
+            "vai.retriangulation.subprocess.run"
+        ) as run_mock:
+            _run_colmap(["colmap", "feature_extractor"], "feature_extractor")
+
+        self.assertEqual(
+            run_mock.call_args.kwargs["env"]["QT_QPA_PLATFORM"],
+            "offscreen",
+        )
+
     def test_merge_prefers_strong_original_then_new_then_weak_original(self) -> None:
         original = {
             1: Point3D(

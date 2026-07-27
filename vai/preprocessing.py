@@ -19,7 +19,7 @@ from vai.colmap_io import (
     write_extrinsics_binary,
 )
 from vai.common import camera_to_dict, read_pose_rows, save_json
-from vai.retriangulation import build_fixed_pose_point_cloud
+from vai.retriangulation import build_fixed_pose_point_cloud, colmap_environment
 
 
 def _single_camera(sparse_dir: Path) -> Any:
@@ -69,7 +69,13 @@ def _run_colmap_undistorter(
         str(max_scale),
     ]
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=colmap_environment(),
+        )
     except subprocess.CalledProcessError as error:
         details = (error.stderr or error.stdout or "").strip()
         raise RuntimeError(f"COLMAP image_undistorter that bai:\n{details}") from error
