@@ -115,10 +115,16 @@ def cameraList_from_camInfos(
 
     return camera_list
 
-def camera_to_JSON(id: int, camera: Camera) -> dict[str, Any]:
+def camera_to_JSON(id: int, camera: Any) -> dict[str, Any]:
     """
-        Convert a Camera object into the compact JSON format saved with outputs.
+        Convert CameraInfo or Camera into the compact JSON saved with outputs.
     """
+    width = int(
+        camera.image_width if hasattr(camera, "image_width") else camera.width
+    )
+    height = int(
+        camera.image_height if hasattr(camera, "image_height") else camera.height
+    )
     Rt: NDArray[np.float64] = np.zeros((4, 4))
     Rt[:3, :3] = camera.R.transpose()
     Rt[:3, 3] = camera.T
@@ -131,8 +137,8 @@ def camera_to_JSON(id: int, camera: Camera) -> dict[str, Any]:
     camera_entry = {
         'id' : id,
         'img_name' : camera.image_name,
-        'width' : camera.image_width,
-        'height' : camera.image_height,
+        'width' : width,
+        'height' : height,
         'position': pos.tolist(),
         'rotation': serializable_array_2d,
         'fy' : camera.fy,

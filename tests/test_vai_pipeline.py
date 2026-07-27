@@ -28,6 +28,24 @@ sys.modules[_GAUSSIAN_IO_SPEC.name] = _GAUSSIAN_IO_MODULE
 _GAUSSIAN_IO_SPEC.loader.exec_module(_GAUSSIAN_IO_MODULE)
 GaussianModelIOMixin = _GAUSSIAN_IO_MODULE.GaussianModelIOMixin
 
+_CAMERA_UTILS_SPEC = importlib.util.spec_from_file_location(
+    "vai_test_camera_utils",
+    Path(__file__).resolve().parents[1] / "utils" / "camera_utils.py",
+)
+assert _CAMERA_UTILS_SPEC is not None and _CAMERA_UTILS_SPEC.loader is not None
+_CAMERA_UTILS_MODULE = importlib.util.module_from_spec(_CAMERA_UTILS_SPEC)
+sys.modules[_CAMERA_UTILS_SPEC.name] = _CAMERA_UTILS_MODULE
+_CAMERA_CLASS_STUB = SimpleNamespace(Camera=object)
+with patch.dict(
+    sys.modules,
+    {
+        "scene": SimpleNamespace(cameras=_CAMERA_CLASS_STUB),
+        "scene.cameras": _CAMERA_CLASS_STUB,
+    },
+):
+    _CAMERA_UTILS_SPEC.loader.exec_module(_CAMERA_UTILS_MODULE)
+camera_to_JSON = _CAMERA_UTILS_MODULE.camera_to_JSON
+
 from vai.colmap_io import (
     Camera,
     Image,
@@ -122,6 +140,25 @@ class VaiCommonTests(unittest.TestCase):
         score, normalized = compute_weighted_score(0.8, 30.0, 0.2, 40.0)
         self.assertAlmostEqual(normalized, 0.75)
         self.assertAlmostEqual(score, 0.785)
+
+    def test_camera_json_accepts_preload_camera_info_dimensions(self) -> None:
+        camera_info = SimpleNamespace(
+            R=np.eye(3, dtype=np.float64),
+            T=np.zeros(3, dtype=np.float64),
+            image_name="train.JPG",
+            width=640,
+            height=480,
+            fx=500.0,
+            fy=500.0,
+            cx=320.0,
+            cy=240.0,
+            camera_model="SIMPLE_RADIAL",
+            radial_k=-0.01,
+        )
+        entry = camera_to_JSON(7, camera_info)
+        self.assertEqual(entry["width"], 640)
+        self.assertEqual(entry["height"], 480)
+        self.assertEqual(entry["camera_model"], "SIMPLE_RADIAL")
 
 
 class CoarseToFineScheduleTests(unittest.TestCase):
