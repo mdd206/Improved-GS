@@ -59,7 +59,10 @@ def _original_radial_camera(metadata: dict[str, Any]) -> dict[str, float | int]:
     if camera.get("model") != "SIMPLE_RADIAL" or len(params) != 4:
         raise ValueError("VAI metadata khong chua camera SIMPLE_RADIAL hop le")
     return {
+        "model": "SIMPLE_RADIAL",
         "focal": float(params[0]),
+        "fx": float(params[0]),
+        "fy": float(params[0]),
         "cx": float(params[1]),
         "cy": float(params[2]),
         "radial_k": float(params[3]),
@@ -128,6 +131,12 @@ def camera_from_pose_row(row: dict[str, str], camera: dict[str, Any]) -> MiniCam
         zfar=zfar,
         world_view_transform=world_view,
         full_proj_transform=full_projection,
+        camera_model=str(camera["model"]),
+        fx=float(camera["fx"]),
+        fy=float(camera["fy"]),
+        cx=float(camera["cx"]),
+        cy=float(camera["cy"]),
+        radial_k=float(camera.get("radial_k", 0.0)),
     )
     result.image_name = Path(row["image_name"]).name
     return result
@@ -191,9 +200,17 @@ def render_vai_scene(
     metadata = load_vai_metadata(source_path)
     resolved_scene_name = scene_name or str(metadata.get("scene_name") or source_path.name)
     pose_rows = read_pose_rows(source_path / metadata.get("test_poses", "test/test_poses.csv"))
-    undistorted_camera = _single_undistorted_camera(source_path)
     original_camera = _original_radial_camera(metadata)
     _validate_pose_intrinsics(pose_rows, original_camera)
+    native_simple_radial = bool(metadata.get("native_simple_radial", False))
+    undistorted_camera = (
+        None if native_simple_radial else _single_undistorted_camera(source_path)
+    )
+    render_camera = (
+        original_camera if native_simple_radial else undistorted_camera
+    )
+    if render_camera is None:
+        raise RuntimeError("Khong xac dinh duoc camera render VAI")
     radial_k = float(original_camera["radial_k"])
 
     render_root = Path(output_root) if output_root else model_path / "vai_submission"
@@ -215,7 +232,7 @@ def render_vai_scene(
         background = torch.tensor(background_color, dtype=torch.float32, device="cuda")
 
         for row in tqdm(pose_rows, desc=f"Rendering VAI {resolved_scene_name}", dynamic_ncols=True):
-            camera = camera_from_pose_row(row, undistorted_camera)
+            camera = camera_from_pose_row(row, render_camera)
             rendering = render(
                 camera,
                 gaussians,
@@ -225,18 +242,19 @@ def render_vai_scene(
                 track_gradients=False,
                 inference_only=True,
             )["render"]
-            rendering = redistort_and_crop(
-                rendering,
-                focal=float(undistorted_camera["fx"]),
-                render_cx=float(undistorted_camera["cx"]),
-                render_cy=float(undistorted_camera["cy"]),
-                radial_k=radial_k,
-                target_cx=float(row["cx"]),
-                target_cy=float(row["cy"]),
-                target_width=int(float(row["width"])),
-                target_height=int(float(row["height"])),
-                interpolation=redistort_interpolation,
-            )
+            if not native_simple_radial:
+                rendering = redistort_and_crop(
+                    rendering,
+                    focal=float(render_camera["fx"]),
+                    render_cx=float(render_camera["cx"]),
+                    render_cy=float(render_camera["cy"]),
+                    radial_k=radial_k,
+                    target_cx=float(row["cx"]),
+                    target_cy=float(row["cy"]),
+                    target_width=int(float(row["width"])),
+                    target_height=int(float(row["height"])),
+                    interpolation=redistort_interpolation,
+                )
             rendering = sharpen_image(
                 rendering,
                 amount=sharpen_amount,
@@ -267,9 +285,17 @@ def render_vai_scene(
             "sharpen_sigma": float(sharpen_sigma),
             "jpeg_quality": int(jpeg_quality),
             "jpeg_subsampling": int(jpeg_subsampling),
+            "camera_mode": (
+                "native_simple_radial"
+                if native_simple_radial
+                else "undistorted_pinhole_then_redistort"
+            ),
             "radial_k": radial_k,
-            "undistorted_camera": undistorted_camera,
+            "original_camera": original_camera,
+            "training_camera": metadata.get("training_camera", {}),
         }
+        if undistorted_camera is not None:
+            manifest["undistorted_camera"] = undistorted_camera
         save_json(model_path / "vai_render.json", manifest)
 
         gt_dir = source_path / metadata.get("test_images", "test/images")

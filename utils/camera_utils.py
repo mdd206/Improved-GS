@@ -10,7 +10,6 @@ from __future__ import annotations
 from scene.cameras import Camera
 import numpy as np
 from numpy.typing import NDArray
-from utils.graphics_utils import fov2focal
 from PIL import Image
 import cv2
 from typing import Any
@@ -73,11 +72,31 @@ def loadCam(
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
-    return Camera(resolution, colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
-                  FoVx=cam_info.FovX, FoVy=cam_info.FovY, depth_params=cam_info.depth_params,
-                  image=image, invdepthmap=invdepthmap,
-                  image_name=cam_info.image_name, uid=id, data_device=args.data_device,
-                  train_test_exp=args.train_test_exp, is_test_dataset=is_test_dataset, is_test_view=cam_info.is_test)
+    scale_x = float(resolution[0]) / float(orig_w)
+    scale_y = float(resolution[1]) / float(orig_h)
+    return Camera(
+        resolution,
+        colmap_id=cam_info.uid,
+        R=cam_info.R,
+        T=cam_info.T,
+        FoVx=cam_info.FovX,
+        FoVy=cam_info.FovY,
+        camera_model=cam_info.camera_model,
+        fx=float(cam_info.fx) * scale_x,
+        fy=float(cam_info.fy) * scale_y,
+        cx=float(cam_info.cx) * scale_x,
+        cy=float(cam_info.cy) * scale_y,
+        radial_k=float(cam_info.radial_k),
+        depth_params=cam_info.depth_params,
+        image=image,
+        invdepthmap=invdepthmap,
+        image_name=cam_info.image_name,
+        uid=id,
+        data_device=args.data_device,
+        train_test_exp=args.train_test_exp,
+        is_test_dataset=is_test_dataset,
+        is_test_view=cam_info.is_test,
+    )
 
 def cameraList_from_camInfos(
     cam_infos: list[Any],
@@ -112,11 +131,15 @@ def camera_to_JSON(id: int, camera: Camera) -> dict[str, Any]:
     camera_entry = {
         'id' : id,
         'img_name' : camera.image_name,
-        'width' : camera.width,
-        'height' : camera.height,
+        'width' : camera.image_width,
+        'height' : camera.image_height,
         'position': pos.tolist(),
         'rotation': serializable_array_2d,
-        'fy' : fov2focal(camera.FovY, camera.height),
-        'fx' : fov2focal(camera.FovX, camera.width)
+        'fy' : camera.fy,
+        'fx' : camera.fx,
+        'camera_model': camera.camera_model,
+        'cx': camera.cx,
+        'cy': camera.cy,
+        'radial_k': camera.radial_k,
     }
     return camera_entry

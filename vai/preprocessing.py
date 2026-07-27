@@ -230,9 +230,21 @@ def validate_processed_scene(scene_path: str | Path) -> dict[str, Any]:
         if not required_path.exists():
             raise FileNotFoundError(f"Scene preprocess thieu: {required_path}")
 
+    with open(metadata_path, encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    native_simple_radial = bool(metadata.get("native_simple_radial", False))
+
     camera = _single_camera(sparse_dir)
-    if camera.model not in {"PINHOLE", "SIMPLE_PINHOLE"}:
-        raise ValueError(f"Camera sau preprocess phai la PINHOLE, nhan duoc {camera.model}")
+    valid_models = (
+        {"SIMPLE_RADIAL"}
+        if native_simple_radial
+        else {"PINHOLE", "SIMPLE_PINHOLE"}
+    )
+    if camera.model not in valid_models:
+        raise ValueError(
+            "Camera sau preprocess khong khop camera_mode: "
+            f"native_simple_radial={native_simple_radial}, model={camera.model}"
+        )
 
     files_by_stem = _files_by_stem(image_dir)
     images = read_extrinsics_binary(str(sparse_dir / "images.bin"))
@@ -244,16 +256,14 @@ def validate_processed_scene(scene_path: str | Path) -> dict[str, Any]:
                 len(registered_names), len(disk_names)
             )
         )
-    non_rgba = []
-    for image_path in files_by_stem.values():
-        with Image.open(image_path) as image:
-            if image.mode != "RGBA":
-                non_rgba.append(image_path.name)
-    if non_rgba:
-        raise ValueError(f"Anh train chua co alpha mask: {non_rgba[:5]}")
-
-    with open(metadata_path, encoding="utf-8") as handle:
-        metadata = json.load(handle)
+    if not native_simple_radial:
+        non_rgba = []
+        for image_path in files_by_stem.values():
+            with Image.open(image_path) as image:
+                if image.mode != "RGBA":
+                    non_rgba.append(image_path.name)
+        if non_rgba:
+            raise ValueError(f"Anh train chua co alpha mask: {non_rgba[:5]}")
     retriangulation = metadata.get("fixed_pose_retriangulation", {})
     if retriangulation.get("enabled") and not (sparse_dir / "points3D.ply").is_file():
         raise FileNotFoundError("Scene P1 thieu sparse/0/points3D.ply da hop nhat")
@@ -265,6 +275,7 @@ def validate_processed_scene(scene_path: str | Path) -> dict[str, Any]:
         "registered_images": len(registered_names),
         "test_poses": pose_count,
         "camera": camera_to_dict(camera),
+        "native_simple_radial": native_simple_radial,
     }
     if retriangulation.get("enabled"):
         result["initial_points"] = int(retriangulation["merged_points"])
@@ -289,6 +300,7 @@ def preprocess_scene(
     min_scale: float = 1.0,
     max_scale: float = 2.0,
     overwrite: bool = False,
+    native_simple_radial: bool = False,
     fixed_pose_retriangulation: bool = False,
     retriangulation_max_reproj_error: float = 2.5,
     retriangulation_min_track_length: int = 2,
@@ -297,11 +309,12 @@ def preprocess_scene(
     retriangulation_min_growth_ratio: float = 0.0,
     retriangulation_sift_device: str = "gpu",
 ) -> dict[str, Any]:
-    """Chuyen mot scene raw VAI thanh scene ImprovedGS co metadata distortion."""
+    """Chuyen mot scene raw VAI thanh scene ImprovedGS voi camera da chon."""
     source_scene = Path(source_scene)
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
-    _check_colmap_executable(colmap_executable)
+    if not native_simple_radial or fixed_pose_retriangulation:
+        _check_colmap_executable(colmap_executable)
 
     scene_name = source_scene.name
     output_scene = output_root / scene_name
@@ -351,31 +364,40 @@ def preprocess_scene(
                 flush=True,
             )
 
-        embedded_count, registered_count = _replace_with_undistorted_scene(
-            work_scene,
-            colmap_executable,
-            blank_pixels,
-            min_scale,
-            max_scale,
-        )
+        if native_simple_radial:
+            registered_count = _synchronize_and_filter_images(
+                work_scene / "sparse" / "0",
+                work_scene / "images",
+            )
+            embedded_count = registered_count
+        else:
+            embedded_count, registered_count = _replace_with_undistorted_scene(
+                work_scene,
+                colmap_executable,
+                blank_pixels,
+                min_scale,
+                max_scale,
+            )
         if retriangulation_stats is not None:
             shutil.move(
                 str(merged_ply),
                 str(work_scene / "sparse" / "0" / "points3D.ply"),
             )
-        undistorted_camera = _single_camera(work_scene / "sparse" / "0")
+        training_camera = _single_camera(work_scene / "sparse" / "0")
         pose_count = len(read_pose_rows(work_scene / "test" / "test_poses.csv"))
         metadata = {
             "format_version": 1,
             "scene_name": scene_name,
             "original_camera": camera_to_dict(original_camera),
-            "undistorted_camera": camera_to_dict(undistorted_camera),
+            "training_camera": camera_to_dict(training_camera),
+            "native_simple_radial": bool(native_simple_radial),
             "train_image_count": embedded_count,
             "registered_image_count": registered_count,
             "test_pose_count": pose_count,
             "test_poses": "test/test_poses.csv",
             "test_images": "test/images",
             "undistort": {
+                "enabled": not native_simple_radial,
                 "blank_pixels": float(blank_pixels),
                 "min_scale": float(min_scale),
                 "max_scale": float(max_scale),
@@ -386,6 +408,8 @@ def preprocess_scene(
                 else {"enabled": False}
             ),
         }
+        if not native_simple_radial:
+            metadata["undistorted_camera"] = camera_to_dict(training_camera)
         save_json(work_scene / VAI_METADATA_FILENAME, metadata)
         validation = validate_processed_scene(work_scene)
 

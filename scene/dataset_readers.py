@@ -31,6 +31,12 @@ class CameraInfo(NamedTuple):
     T: NDArray[np.floating]
     FovY: float
     FovX: float
+    camera_model: str
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    radial_k: float
     depth_params: dict[str, Any] | None
     image_path: str
     image_name: str
@@ -110,17 +116,22 @@ def readColmapCameras(
         R = np.transpose(qvec2rotmat(extr.qvec))
         T = np.array(extr.tvec)
 
-        if intr.model=="SIMPLE_PINHOLE":
-            focal_length_x = intr.params[0]
-            FovY = focal2fov(focal_length_x, height)
-            FovX = focal2fov(focal_length_x, width)
-        elif intr.model=="PINHOLE":
-            focal_length_x = intr.params[0]
-            focal_length_y = intr.params[1]
-            FovY = focal2fov(focal_length_y, height)
-            FovX = focal2fov(focal_length_x, width)
+        radial_k = 0.0
+        if intr.model == "SIMPLE_PINHOLE":
+            focal_length_x, cx, cy = intr.params
+            focal_length_y = focal_length_x
+        elif intr.model == "PINHOLE":
+            focal_length_x, focal_length_y, cx, cy = intr.params
+        elif intr.model == "SIMPLE_RADIAL":
+            focal_length_x, cx, cy, radial_k = intr.params
+            focal_length_y = focal_length_x
         else:
-            assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
+            raise ValueError(
+                "Colmap camera model not handled: expected PINHOLE, "
+                f"SIMPLE_PINHOLE or SIMPLE_RADIAL, received {intr.model}"
+            )
+        FovY = focal2fov(float(focal_length_y), height)
+        FovX = focal2fov(float(focal_length_x), width)
 
         n_remove = len(extr.name.split('.')[-1]) + 1
         depth_params = None
@@ -134,9 +145,26 @@ def readColmapCameras(
         image_name = extr.name
         depth_path = os.path.join(depths_folder, f"{extr.name[:-n_remove]}.png") if depths_folder != "" else ""
 
-        cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, depth_params=depth_params,
-                              image_path=image_path, image_name=image_name, depth_path=depth_path,
-                              width=width, height=height, is_test=image_name in test_cam_names_list)
+        cam_info = CameraInfo(
+            uid=uid,
+            R=R,
+            T=T,
+            FovY=FovY,
+            FovX=FovX,
+            camera_model=intr.model,
+            fx=float(focal_length_x),
+            fy=float(focal_length_y),
+            cx=float(cx),
+            cy=float(cy),
+            radial_k=float(radial_k),
+            depth_params=depth_params,
+            image_path=image_path,
+            image_name=image_name,
+            depth_path=depth_path,
+            width=width,
+            height=height,
+            is_test=image_name in test_cam_names_list,
+        )
         cam_infos.append(cam_info)
 
     sys.stdout.write('\n')
@@ -381,9 +409,30 @@ def readCamerasFromTransforms(
 
             depth_path = os.path.join(depths_folder, f"{image_name}.png") if depths_folder != "" else ""
 
-            cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX,
-                            image_path=image_path, image_name=image_name,
-                            width=image.size[0], height=image.size[1], depth_path=depth_path, depth_params=None, is_test=is_test))
+            fx = fov2focal(FovX, image.size[0])
+            fy = fov2focal(FovY, image.size[1])
+            cam_infos.append(
+                CameraInfo(
+                    uid=idx,
+                    R=R,
+                    T=T,
+                    FovY=FovY,
+                    FovX=FovX,
+                    camera_model="PINHOLE",
+                    fx=float(fx),
+                    fy=float(fy),
+                    cx=0.5 * image.size[0],
+                    cy=0.5 * image.size[1],
+                    radial_k=0.0,
+                    image_path=image_path,
+                    image_name=image_name,
+                    width=image.size[0],
+                    height=image.size[1],
+                    depth_path=depth_path,
+                    depth_params=None,
+                    is_test=is_test,
+                )
+            )
             
     return cam_infos
 

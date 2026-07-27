@@ -33,6 +33,7 @@ from vai.colmap_io import (
     Image,
     Point3D,
     read_extrinsics_binary,
+    read_intrinsics_binary,
     read_points3d_binary,
     write_extrinsics_binary,
     write_intrinsics_binary,
@@ -60,6 +61,11 @@ from utils.pose_aware_sampling import (
     build_pose_sampling_plan_v1,
     build_repeated_camera_pool,
     pose_from_csv_row,
+)
+from utils.simple_radial import (
+    project_simple_radial,
+    simple_radial_projection_hessians,
+    simple_radial_projection_jacobian,
 )
 
 
@@ -453,6 +459,92 @@ class RetriangulationTests(unittest.TestCase):
 
 
 class PreprocessingTests(unittest.TestCase):
+    def test_native_simple_radial_keeps_raw_rgb_and_skips_colmap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_scene = root / "raw" / "HCM0204"
+            source_images = source_scene / "train" / "images"
+            source_sparse = source_scene / "train" / "sparse" / "0"
+            test_dir = source_scene / "test"
+            source_images.mkdir(parents=True)
+            source_sparse.mkdir(parents=True)
+            test_dir.mkdir(parents=True)
+            PilImage.new("RGB", (4, 3), (10, 20, 30)).save(source_images / "train.JPG")
+            write_intrinsics_binary(
+                {
+                    1: Camera(
+                        id=1,
+                        model="SIMPLE_RADIAL",
+                        width=4,
+                        height=3,
+                        params=np.array([10.0, 2.0, 1.5, 0.01]),
+                    )
+                },
+                source_sparse / "cameras.bin",
+            )
+            write_extrinsics_binary(
+                {
+                    1: make_colmap_image(1, "train.JPG"),
+                    2: make_colmap_image(2, "missing.JPG"),
+                },
+                source_sparse / "images.bin",
+            )
+            (source_sparse / "points3D.bin").write_bytes(b"\x00" * 8)
+            with open(test_dir / "test_poses.csv", "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=POSE_COLUMNS)
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "image_name": "test.JPG",
+                        "qw": "1",
+                        "qx": "0",
+                        "qy": "0",
+                        "qz": "0",
+                        "tx": "0",
+                        "ty": "0",
+                        "tz": "0",
+                        "fx": "10",
+                        "fy": "10",
+                        "cx": "2",
+                        "cy": "1.5",
+                        "width": "4",
+                        "height": "3",
+                    }
+                )
+
+            output_root = root / "native"
+            with patch(
+                "vai.preprocessing._check_colmap_executable",
+                side_effect=AssertionError("native D3 must not check COLMAP"),
+            ):
+                result = preprocess_scene(
+                    source_scene,
+                    output_root,
+                    native_simple_radial=True,
+                )
+
+            output_scene = output_root / "HCM0204"
+            self.assertTrue(result["native_simple_radial"])
+            self.assertEqual(result["train_images"], 1)
+            self.assertTrue((output_scene / "images" / "train.JPG").is_file())
+            self.assertFalse((output_scene / "images" / "train.png").exists())
+            with PilImage.open(output_scene / "images" / "train.JPG") as image:
+                self.assertEqual(image.mode, "RGB")
+            camera = next(
+                iter(read_intrinsics_binary(output_scene / "sparse" / "0" / "cameras.bin").values())
+            )
+            self.assertEqual(camera.model, "SIMPLE_RADIAL")
+            self.assertEqual(
+                [image.name for image in read_extrinsics_binary(output_scene / "sparse" / "0" / "images.bin").values()],
+                ["train.JPG"],
+            )
+            with open(output_scene / "vai_metadata.json", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            self.assertTrue(metadata["native_simple_radial"])
+            self.assertFalse(metadata["undistort"]["enabled"])
+            self.assertEqual(metadata["training_camera"]["model"], "SIMPLE_RADIAL")
+            self.assertNotIn("undistorted_camera", metadata)
+
     def test_scene_is_normalized_for_improvedgs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -783,6 +875,70 @@ class DistortionTests(unittest.TestCase):
         self.assertGreater(float((bicubic - bilinear).abs().sum().item()), 0.0)
 
 
+class SimpleRadialProjectionTests(unittest.TestCase):
+    def test_projection_uses_colmap_pixel_centers(self) -> None:
+        point = torch.tensor([0.0, 0.0, 2.0], dtype=torch.float64)
+        projected = project_simple_radial(
+            point,
+            focal_x=10.0,
+            focal_y=12.0,
+            cx=2.0,
+            cy=1.5,
+            radial_k=0.1,
+        )
+        torch.testing.assert_close(
+            projected,
+            torch.tensor([1.5, 1.0], dtype=torch.float64),
+        )
+
+    def test_analytic_jacobian_matches_autograd(self) -> None:
+        point = torch.tensor([0.3, -0.2, 2.0], dtype=torch.float64, requires_grad=True)
+        expected = torch.autograd.functional.jacobian(
+            lambda value: project_simple_radial(
+                value,
+                focal_x=850.0,
+                focal_y=830.0,
+                cx=512.0,
+                cy=384.0,
+                radial_k=-0.07,
+            ),
+            point,
+        )
+        actual = simple_radial_projection_jacobian(
+            point,
+            focal_x=850.0,
+            focal_y=830.0,
+            radial_k=-0.07,
+        )
+        torch.testing.assert_close(actual, expected, atol=1e-10, rtol=1e-10)
+
+    def test_analytic_hessians_match_autograd(self) -> None:
+        point = torch.tensor([0.3, -0.2, 2.0], dtype=torch.float64, requires_grad=True)
+        expected = torch.stack(
+            [
+                torch.autograd.functional.hessian(
+                    lambda value, axis=axis: project_simple_radial(
+                        value,
+                        focal_x=850.0,
+                        focal_y=830.0,
+                        cx=512.0,
+                        cy=384.0,
+                        radial_k=-0.07,
+                    )[axis],
+                    point,
+                )
+                for axis in range(2)
+            ]
+        )
+        actual = simple_radial_projection_hessians(
+            point,
+            focal_x=850.0,
+            focal_y=830.0,
+            radial_k=-0.07,
+        )
+        torch.testing.assert_close(actual, expected, atol=1e-10, rtol=1e-10)
+
+
 class ImageProcessingTests(unittest.TestCase):
     def test_sharpen_uses_requested_amount_and_sigma(self) -> None:
         image = torch.zeros((3, 9, 9), dtype=torch.float32)
@@ -896,22 +1052,15 @@ class ImageProcessingTests(unittest.TestCase):
 
         render_config = config["postprocess_args"]
         train_config = config["train_args"]
-        self.assertEqual(train_config["iterations"], 60000)
-        self.assertEqual(train_config["save_iterations"], [30000, 45000, 60000])
+        self.assertEqual(train_config["iterations"], 30000)
+        self.assertEqual(train_config["save_iterations"], [30000])
         self.assertEqual(train_config["position_lr_max_steps"], 30000)
-        self.assertTrue(train_config["coarse_to_fine"])
-        self.assertEqual(train_config["coarse_to_fine_middle_iter"], 2000)
-        self.assertEqual(train_config["coarse_to_fine_full_iter"], 5000)
-        self.assertTrue(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["pose_aware_mode"], "v1")
-        self.assertEqual(train_config["pose_aware_k"], 3)
-        self.assertEqual(train_config["pose_aware_angle_weight"], 0.25)
-        self.assertEqual(train_config["pose_aware_extra_fraction"], 0.25)
-        self.assertEqual(train_config["pose_aware_max_repeat"], 2)
-        self.assertEqual(train_config["densify_grad_threshold"], 0.00020)
+        self.assertFalse(train_config["coarse_to_fine"])
+        self.assertFalse(train_config["pose_aware_sampling"])
+        self.assertEqual(train_config["densify_grad_threshold"], 0.0025)
         self.assertEqual(train_config["budget"], 5_500_000)
-        self.assertIn("vai_cleaned_no_p1", config["data_root"])
-        self.assertIn("pose_aware_60k_5m5", config["output_root"])
+        self.assertIn("vai_native_simple_radial", config["data_root"])
+        self.assertIn("d3_native_simple_radial_improvedgs_30k_5m5_dense0025", config["output_root"])
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -920,10 +1069,10 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["output_extension"], "csv")
         self.assertTrue(render_config["save_png"])
         self.assertIn("public_set", render_config["png_root"])
-        self.assertIn("pose_aware_60k_5m5", render_config["png_root"])
+        self.assertIn("d3_native_simple_radial_improvedgs_30k_5m5_dense0025", render_config["png_root"])
         notebook_source = "\n".join(code_cells)
         self.assertIn(
-            "REPO_BRANCH = 'agent/pose-aware-60k-5m5'",
+            "REPO_BRANCH = 'agent/d3-native-simple-radial-improvedgs-5m5'",
             notebook_source,
         )
         self.assertIn(
@@ -939,12 +1088,13 @@ class ImageProcessingTests(unittest.TestCase):
             for cell in notebook["cells"]
         )
         self.assertIn(
-            "ImprovedGS + C2F + pose-aware v1, dense 0.0002, 60k, budget 5.5M",
+            "D3: native SIMPLE_RADIAL + ImprovedGS, dense 0.0025, 30k, budget 5.5M",
             all_notebook_source,
         )
         self.assertIn("SCENE_NAMES = ['HCM0204']", notebook_source)
         self.assertIn("'--subset', *SELECTED_SCENES", notebook_source)
         self.assertIn("'--overwrite'", notebook_source)
+        self.assertIn("'--native_simple_radial'", notebook_source)
         self.assertNotIn("'--fixed_pose_retriangulation'", notebook_source)
         self.assertNotIn("'--retriangulation_min_growth_ratio'", notebook_source)
         self.assertNotIn("'--retriangulation_sift_device'", notebook_source)
@@ -952,32 +1102,33 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertIn("f'{SET_NAME}_{EXPERIMENT_NAME}_jpeg.zip'", notebook_source)
         self.assertIn("f'{SET_NAME}_{EXPERIMENT_NAME}_png.zip'", notebook_source)
         self.assertGreaterEqual(notebook_source.count("'vai_package.py'"), 2)
-        self.assertIn("'--no-install-recommends', 'colmap'", notebook_source)
+        self.assertNotIn("'--no-install-recommends', 'colmap'", notebook_source)
+        self.assertNotIn("apt-get", notebook_source)
         self.assertNotIn("'xvfb'", notebook_source)
         self.assertNotIn("'xauth'", notebook_source)
         self.assertIn("'MAX_JOBS'] = '2'", notebook_source)
         self.assertNotIn("'numpy==1.26.1'", notebook_source)
         self.assertNotIn("'opencv-python==4.10.0.82'", notebook_source)
-        self.assertIn("install_colmap_with_conda", notebook_source)
+        self.assertNotIn("install_colmap_with_conda", notebook_source)
         self.assertNotIn("'install', '-y', '-qq', 'colmap'", notebook_source)
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 
-    def test_hcm0204_template_matches_pose_aware_60k_experiment(self) -> None:
+    def test_hcm0204_template_matches_d3_experiment(self) -> None:
         config_path = Path(__file__).resolve().parents[1] / "configs" / "vai_hcm0204.json"
         with open(config_path, encoding="utf-8") as handle:
             config = json.load(handle)
 
         train_config = config["train_args"]
-        self.assertEqual(train_config["iterations"], 60000)
-        self.assertEqual(train_config["save_iterations"], [30000, 45000, 60000])
+        self.assertEqual(train_config["iterations"], 30000)
+        self.assertEqual(train_config["save_iterations"], [30000])
         self.assertEqual(train_config["position_lr_max_steps"], 30000)
-        self.assertTrue(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["pose_aware_mode"], "v1")
-        self.assertEqual(train_config["densify_grad_threshold"], 0.00020)
+        self.assertFalse(train_config["coarse_to_fine"])
+        self.assertFalse(train_config["pose_aware_sampling"])
+        self.assertEqual(train_config["densify_grad_threshold"], 0.0025)
         self.assertEqual(train_config["budget"], 5_500_000)
-        self.assertIn("vai_cleaned_no_p1", config["data_root"])
-        self.assertIn("pose_aware_60k_5m5", config["output_root"])
+        self.assertIn("vai_native_simple_radial", config["data_root"])
+        self.assertIn("d3_native_simple_radial_improvedgs_30k_5m5_dense0025", config["output_root"])
 
 
 class EdgeMaskTests(unittest.TestCase):

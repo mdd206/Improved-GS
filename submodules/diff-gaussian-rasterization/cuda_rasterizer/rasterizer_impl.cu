@@ -222,6 +222,10 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 	const float* projmatrix,
 	const float* cam_pos,
 	const float tan_fovx, float tan_fovy,
+	const float focal_x, float focal_y,
+	const float principal_x, float principal_y,
+	const float radial_k,
+	const int camera_model,
 	const bool prefiltered,
 	float* out_color,
 	float* invdepth,
@@ -232,9 +236,6 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 	int* radii,
 	bool debug)
 {
-	const float focal_y = height / (2.0f * tan_fovy);
-	const float focal_x = width / (2.0f * tan_fovx);
-
 	size_t chunk_size = required<GeometryState>(P);
 	char* chunkptr = geometryBuffer(chunk_size);
 	GeometryState geomState = GeometryState::fromChunk(chunkptr, P);
@@ -277,6 +278,8 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 		width, height,
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
+		principal_x, principal_y,
+		radial_k, camera_model,
 		radii,
 		geomState.means2D,
 		geomState.depths,
@@ -448,6 +451,8 @@ int CudaRasterizer::Rasterizer::forward_aux(
 		width, height,
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
+		0.5f * width, 0.5f * height,
+		0.0f, 0,
 		radii,
 		geomState.means2D,
 		geomState.depths,
@@ -590,6 +595,8 @@ int CudaRasterizer::Rasterizer::forward_depth(
 		width, height,
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
+		0.5f * width, 0.5f * height,
+		0.0f, 0,
 		radii,
 		geomState.means2D,
 		geomState.depths,
@@ -685,6 +692,10 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* projmatrix,
 	const float* campos,
 	const float tan_fovx, float tan_fovy,
+	const float focal_x, float focal_y,
+	const float principal_x, float principal_y,
+	const float radial_k,
+	const int camera_model,
 	const int* radii,
 	char* geom_buffer,
 	char* binning_buffer,
@@ -708,9 +719,6 @@ void CudaRasterizer::Rasterizer::backward(
 	bool antialiasing,
 	bool debug)
 {
-	const float focal_y = height / (2.0f * tan_fovy);
-	const float focal_x = width / (2.0f * tan_fovx);
-
 	const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
 	const dim3 block(BLOCK_X, BLOCK_Y, 1);
 	const int num_tiles = tile_grid.x * tile_grid.y;
@@ -776,8 +784,11 @@ void CudaRasterizer::Rasterizer::backward(
 		cov3D_ptr,
 		viewmatrix,
 		projmatrix,
+		width, height,
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
+		principal_x, principal_y,
+		radial_k, camera_model,
 		(glm::vec3*)campos,
 			(float4*)dL_dmean2D,
 		dL_dconic,

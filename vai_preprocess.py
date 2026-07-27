@@ -18,6 +18,11 @@ def main() -> int:
     parser.add_argument("--min_scale", type=float, default=1.0)
     parser.add_argument("--max_scale", type=float, default=2.0)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--native_simple_radial",
+        action="store_true",
+        help="Giu anh va camera SIMPLE_RADIAL goc, khong chay image_undistorter",
+    )
     parser.add_argument("--fixed_pose_retriangulation", action="store_true")
     parser.add_argument("--retriangulation_max_reproj_error", type=float, default=2.5)
     parser.add_argument("--retriangulation_min_track_length", type=int, default=2)
@@ -47,6 +52,7 @@ def main() -> int:
             min_scale=args.min_scale,
             max_scale=args.max_scale,
             overwrite=args.overwrite,
+            native_simple_radial=args.native_simple_radial,
             fixed_pose_retriangulation=args.fixed_pose_retriangulation,
             retriangulation_max_reproj_error=args.retriangulation_max_reproj_error,
             retriangulation_min_track_length=args.retriangulation_min_track_length,

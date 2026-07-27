@@ -70,6 +70,12 @@ class Camera(nn.Module):
         T: NDArray[np.floating],
         FoVx: float,
         FoVy: float,
+        camera_model: str,
+        fx: float,
+        fy: float,
+        cx: float,
+        cy: float,
+        radial_k: float,
         depth_params: dict[str, float] | None,
         image: PILImage.Image,
         invdepthmap: NDArray[np.floating] | None,
@@ -93,6 +99,12 @@ class Camera(nn.Module):
         self.T = T
         self.FoVx = FoVx
         self.FoVy = FoVy
+        self.camera_model = str(camera_model)
+        self.fx = float(fx)
+        self.fy = float(fy)
+        self.cx = float(cx)
+        self.cy = float(cy)
+        self.radial_k = float(radial_k)
         self.image_name = image_name
 
         self.data_device = _resolve_camera_device(data_device)
@@ -157,6 +169,12 @@ class MiniCam:
         zfar: float,
         world_view_transform: torch.Tensor,
         full_proj_transform: torch.Tensor,
+        camera_model: str,
+        fx: float,
+        fy: float,
+        cx: float,
+        cy: float,
+        radial_k: float,
     ) -> None:
         """
             Store projection fields and derive the camera center from the view matrix.
@@ -169,5 +187,11 @@ class MiniCam:
         self.zfar = zfar
         self.world_view_transform = world_view_transform
         self.full_proj_transform = full_proj_transform
+        self.camera_model = str(camera_model)
+        self.fx = float(fx)
+        self.fy = float(fy)
+        self.cx = float(cx)
+        self.cy = float(cy)
+        self.radial_k = float(radial_k)
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
