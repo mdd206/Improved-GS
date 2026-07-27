@@ -74,6 +74,9 @@ Config mac dinh trong notebook da dat:
 
 - `training_method=improvedgs`.
 - `iterations=60000`; luu point cloud tai 30.000, 45.000 va 60.000.
+- PLY duoc ghi binary theo chunk 65.536 Gaussian va chi replace file dich sau
+  khi ghi xong, tranh peak RAM khi model gan budget 5,5 trieu. Thi nghiem khong
+  luu optimizer checkpoint mac dinh vi state nay rat lon.
 - `position_lr_max_steps=30000` de giu nguyen lich position LR cua pipeline goc;
   30.000 iteration sau la giai do refine o LR thap.
 - `coarse_to_fine=true`: train 1/4 resolution den iteration 2.000, 1/2 den 5.000, sau do dung full resolution.
@@ -81,8 +84,6 @@ Config mac dinh trong notebook da dat:
   `k=3` theo chi phi vi tri + `0.25 *` chi phi goc, roi lap them toi da mot lan
   cho khoang 25% camera.
 - `densify_grad_threshold=0.00020` va `budget=5500000`.
-- Luu mot optimizer checkpoint tai iteration 30.000 de co the tiep tuc neu Kaggle
-  bi ngat nua chang.
 - `eval=false` de dung toan bo 240 anh train, khong LLFF-hold anh.
 - `data_device=cpu` de 240 anh va edge map khong chiem bo nho GPU Kaggle.
 - `postprocess_script=vai_render.py`.

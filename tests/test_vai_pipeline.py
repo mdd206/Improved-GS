@@ -18,6 +18,16 @@ import torch
 from PIL import Image as PilImage
 from PIL import JpegImagePlugin
 
+_GAUSSIAN_IO_SPEC = importlib.util.spec_from_file_location(
+    "vai_gaussian_model_io",
+    Path(__file__).resolve().parents[1] / "scene" / "gaussian_model_io.py",
+)
+assert _GAUSSIAN_IO_SPEC is not None and _GAUSSIAN_IO_SPEC.loader is not None
+_GAUSSIAN_IO_MODULE = importlib.util.module_from_spec(_GAUSSIAN_IO_SPEC)
+sys.modules[_GAUSSIAN_IO_SPEC.name] = _GAUSSIAN_IO_MODULE
+_GAUSSIAN_IO_SPEC.loader.exec_module(_GAUSSIAN_IO_MODULE)
+GaussianModelIOMixin = _GAUSSIAN_IO_MODULE.GaussianModelIOMixin
+
 from vai.colmap_io import (
     Camera,
     Image,
@@ -568,6 +578,168 @@ class PreprocessingTests(unittest.TestCase):
             self.assertTrue(metadata["fixed_pose_retriangulation"]["poses_fixed"])
 
 
+class GaussianModelIOTests(unittest.TestCase):
+    @staticmethod
+    def _read_binary_ply(path: Path) -> tuple[list[str], np.ndarray]:
+        property_names: list[str] = []
+        point_count = None
+        with path.open("rb") as source:
+            while True:
+                raw_line = source.readline()
+                if not raw_line:
+                    raise AssertionError("PLY header khong co end_header")
+                line = raw_line.decode("ascii").strip()
+                if line.startswith("element vertex "):
+                    point_count = int(line.rsplit(" ", 1)[1])
+                elif line.startswith("property float "):
+                    property_names.append(line.rsplit(" ", 1)[1])
+                elif line == "end_header":
+                    break
+            if point_count is None:
+                raise AssertionError("PLY header khong co vertex count")
+            dtype = np.dtype([(name, "<f4") for name in property_names])
+            vertices = np.fromfile(source, dtype=dtype, count=point_count)
+        return property_names, vertices
+
+    @staticmethod
+    def _make_small_gaussian_model(point_count: int = 5) -> GaussianModelIOMixin:
+        model = GaussianModelIOMixin.__new__(GaussianModelIOMixin)
+        model._xyz = torch.arange(point_count * 3, dtype=torch.float32).reshape(point_count, 3)
+        model._features_dc = (
+            torch.arange(point_count * 3, dtype=torch.float32).reshape(point_count, 1, 3)
+            + 100.0
+        )
+        model._features_rest = (
+            torch.arange(point_count * 6, dtype=torch.float32).reshape(point_count, 2, 3)
+            + 200.0
+        )
+        model._opacity = torch.arange(point_count, dtype=torch.float32).reshape(point_count, 1)
+        model._scaling = (
+            torch.arange(point_count * 3, dtype=torch.float32).reshape(point_count, 3)
+            + 300.0
+        )
+        model._rotation = (
+            torch.arange(point_count * 4, dtype=torch.float32).reshape(point_count, 4)
+            + 400.0
+        )
+        return model
+
+    def test_save_ply_writes_binary_chunks_with_bounded_rows(self) -> None:
+        model = self._make_small_gaussian_model()
+        concatenate_rows: list[int] = []
+        original_concatenate = np.concatenate
+
+        def record_concatenate(arrays: tuple[np.ndarray, ...], axis: int) -> np.ndarray:
+            result = original_concatenate(arrays, axis=axis)
+            concatenate_rows.append(int(result.shape[0]))
+            return result
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "point_cloud.ply"
+            with patch("vai_gaussian_model_io.PLY_WRITE_CHUNK_SIZE", 2), patch(
+                "vai_gaussian_model_io.np.concatenate",
+                side_effect=record_concatenate,
+            ), patch("builtins.print"):
+                model.save_ply(str(output_path))
+
+            self.assertEqual(concatenate_rows, [2, 2, 1])
+            self.assertTrue(output_path.is_file())
+            self.assertFalse(Path(f"{output_path}.tmp").exists())
+            property_names, vertices = self._read_binary_ply(output_path)
+            self.assertEqual(len(vertices), 5)
+            self.assertIn("f_rest_5", property_names)
+            xyz = np.column_stack(
+                (
+                    np.asarray(vertices["x"]),
+                    np.asarray(vertices["y"]),
+                    np.asarray(vertices["z"]),
+                )
+            )
+            np.testing.assert_array_equal(xyz, model._xyz.numpy())
+            np.testing.assert_array_equal(
+                np.asarray(vertices["f_rest_5"]),
+                model._features_rest[:, 1, 2].numpy(),
+            )
+
+    def test_save_ply_removes_partial_file_after_error(self) -> None:
+        model = self._make_small_gaussian_model()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "point_cloud.ply"
+            with patch(
+                "vai_gaussian_model_io.np.concatenate",
+                side_effect=MemoryError("test"),
+            ), patch("builtins.print"):
+                with self.assertRaises(MemoryError):
+                    model.save_ply(str(output_path))
+
+            self.assertFalse(output_path.exists())
+            self.assertFalse(Path(f"{output_path}.tmp").exists())
+
+    def test_load_ply_uses_float32_and_restores_feature_layout(self) -> None:
+        point_count = 2
+        coefficient_count = 3
+        columns = {
+            "x": np.array([1.0, 2.0], dtype=np.float32),
+            "y": np.array([3.0, 4.0], dtype=np.float32),
+            "z": np.array([5.0, 6.0], dtype=np.float32),
+            "opacity": np.array([0.1, 0.2], dtype=np.float32),
+            **{
+                f"f_dc_{index}": np.array([index, index + 0.5], dtype=np.float32)
+                for index in range(3)
+            },
+            **{
+                f"f_rest_{index}": np.array([index, index + 0.5], dtype=np.float32)
+                for index in range(3 * coefficient_count)
+            },
+            **{
+                f"scale_{index}": np.array([index + 10.0, index + 10.5], dtype=np.float32)
+                for index in range(3)
+            },
+            **{
+                f"rot_{index}": np.array([index + 20.0, index + 20.5], dtype=np.float32)
+                for index in range(4)
+            },
+        }
+
+        class FakeVertices:
+            data = np.empty(point_count, dtype=np.float32)
+            properties = [SimpleNamespace(name=name) for name in columns]
+
+            def __getitem__(self, name: str) -> np.ndarray:
+                return columns[name]
+
+        class FakePlyData:
+            @staticmethod
+            def read(_path: str) -> SimpleNamespace:
+                return SimpleNamespace(elements=[FakeVertices()])
+
+        model = GaussianModelIOMixin.__new__(GaussianModelIOMixin)
+        model.max_sh_degree = 1
+        empty_dtypes: list[object] = []
+        original_empty = np.empty
+
+        def record_empty(shape: object, dtype: object = float, *args: object, **kwargs: object) -> np.ndarray:
+            empty_dtypes.append(dtype)
+            return original_empty(shape, dtype=dtype, *args, **kwargs)
+
+        with patch.dict(sys.modules, {"plyfile": SimpleNamespace(PlyData=FakePlyData)}), patch.object(
+            torch.Tensor,
+            "to",
+            lambda tensor, *args, **kwargs: tensor,
+        ), patch("vai_gaussian_model_io.np.empty", side_effect=record_empty):
+            model.load_ply("fake.ply")
+
+        self.assertEqual(empty_dtypes, [np.float32] * 6)
+        self.assertEqual(tuple(model._features_dc.shape), (point_count, 1, 3))
+        self.assertEqual(
+            tuple(model._features_rest.shape),
+            (point_count, coefficient_count, 3),
+        )
+        self.assertEqual(model._features_rest.dtype, torch.float32)
+        self.assertEqual(float(model._features_rest[1, 2, 1]), 5.5)
+        self.assertEqual(model.active_sh_degree, model.max_sh_degree)
+
+
 class DistortionTests(unittest.TestCase):
     def test_zero_distortion_is_identity(self) -> None:
         image = torch.rand((3, 5, 7), dtype=torch.float32)
@@ -724,7 +896,6 @@ class ImageProcessingTests(unittest.TestCase):
 
         render_config = config["postprocess_args"]
         train_config = config["train_args"]
-        self.assertEqual(config["checkpoint_args"]["checkpoint_iterations"], [30000])
         self.assertEqual(train_config["iterations"], 60000)
         self.assertEqual(train_config["save_iterations"], [30000, 45000, 60000])
         self.assertEqual(train_config["position_lr_max_steps"], 30000)
@@ -805,7 +976,6 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(train_config["pose_aware_mode"], "v1")
         self.assertEqual(train_config["densify_grad_threshold"], 0.00020)
         self.assertEqual(train_config["budget"], 5_500_000)
-        self.assertEqual(config["checkpoint_args"]["checkpoint_iterations"], [30000])
         self.assertIn("vai_cleaned_no_p1", config["data_root"])
         self.assertIn("pose_aware_60k_5m5", config["output_root"])
 

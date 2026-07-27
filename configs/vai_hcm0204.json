@@ -9,9 +9,6 @@
   "run_postprocess": true,
   "postprocess_script": "vai_render.py",
   "select_best_repeat_by_psnr": false,
-  "checkpoint_args": {
-    "checkpoint_iterations": [30000]
-  },
 
   "train_args": {
     "training_method": "improvedgs",
