@@ -1,6 +1,7 @@
 """Tien xu ly scene VAI thanh layout COLMAP ma ImprovedGS doc truc tiep."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ from vai.colmap_io import (
     write_extrinsics_binary,
 )
 from vai.common import camera_to_dict, read_pose_rows, save_json
+from vai.retriangulation import build_fixed_pose_point_cloud
 
 
 def _single_camera(sparse_dir: Path) -> Any:
@@ -240,14 +242,24 @@ def validate_processed_scene(scene_path: str | Path) -> dict[str, Any]:
     if non_rgba:
         raise ValueError(f"Anh train chua co alpha mask: {non_rgba[:5]}")
 
+    with open(metadata_path, encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    retriangulation = metadata.get("fixed_pose_retriangulation", {})
+    if retriangulation.get("enabled") and not (sparse_dir / "points3D.ply").is_file():
+        raise FileNotFoundError("Scene P1 thieu sparse/0/points3D.ply da hop nhat")
+
     pose_count = len(read_pose_rows(pose_csv))
-    return {
+    result = {
         "scene_name": scene_path.name,
         "train_images": len(disk_names),
         "registered_images": len(registered_names),
         "test_poses": pose_count,
         "camera": camera_to_dict(camera),
     }
+    if retriangulation.get("enabled"):
+        result["initial_points"] = int(retriangulation["merged_points"])
+        result["point_growth_ratio"] = float(retriangulation["growth_ratio"])
+    return result
 
 
 def _safe_remove_scene(scene_path: Path, output_root: Path) -> None:
@@ -267,6 +279,12 @@ def preprocess_scene(
     min_scale: float = 1.0,
     max_scale: float = 2.0,
     overwrite: bool = False,
+    fixed_pose_retriangulation: bool = False,
+    retriangulation_max_reproj_error: float = 2.5,
+    retriangulation_min_track_length: int = 2,
+    retriangulation_voxel_divisor: float = 6_000.0,
+    retriangulation_max_points: int = 600_000,
+    retriangulation_min_growth_ratio: float = 0.0,
 ) -> dict[str, Any]:
     """Chuyen mot scene raw VAI thanh scene ImprovedGS co metadata distortion."""
     source_scene = Path(source_scene)
@@ -290,6 +308,31 @@ def preprocess_scene(
                 f"Camera raw VAI phai la SIMPLE_RADIAL, nhan duoc {original_camera.model}"
             )
 
+        retriangulation_stats: dict[str, Any] | None = None
+        merged_ply = work_scene / "fixed_pose_points3D.ply"
+        if fixed_pose_retriangulation:
+            print("  P1: extract feature, exhaustive match va triangulate voi pose co dinh...")
+            retriangulation_stats = build_fixed_pose_point_cloud(
+                image_dir=work_scene / "images",
+                sparse_dir=work_scene / "sparse" / "0",
+                output_ply=merged_ply,
+                colmap_executable=colmap_executable,
+                max_reprojection_error=retriangulation_max_reproj_error,
+                min_track_length=retriangulation_min_track_length,
+                voxel_divisor=retriangulation_voxel_divisor,
+                max_points=retriangulation_max_points,
+                min_growth_ratio=retriangulation_min_growth_ratio,
+            )
+            print(
+                "  P1: original={} triangulated={}/{} merged={} growth={:.1%}".format(
+                    retriangulation_stats["original_points"],
+                    retriangulation_stats["accepted_triangulated_points"],
+                    retriangulation_stats["triangulated_points"],
+                    retriangulation_stats["merged_points"],
+                    retriangulation_stats["growth_ratio"],
+                )
+            )
+
         embedded_count, registered_count = _replace_with_undistorted_scene(
             work_scene,
             colmap_executable,
@@ -297,6 +340,11 @@ def preprocess_scene(
             min_scale,
             max_scale,
         )
+        if retriangulation_stats is not None:
+            shutil.move(
+                str(merged_ply),
+                str(work_scene / "sparse" / "0" / "points3D.ply"),
+            )
         undistorted_camera = _single_camera(work_scene / "sparse" / "0")
         pose_count = len(read_pose_rows(work_scene / "test" / "test_poses.csv"))
         metadata = {
@@ -314,6 +362,11 @@ def preprocess_scene(
                 "min_scale": float(min_scale),
                 "max_scale": float(max_scale),
             },
+            "fixed_pose_retriangulation": (
+                retriangulation_stats
+                if retriangulation_stats is not None
+                else {"enabled": False}
+            ),
         }
         save_json(work_scene / VAI_METADATA_FILENAME, metadata)
         validation = validate_processed_scene(work_scene)

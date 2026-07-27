@@ -25,6 +25,7 @@ from scene.training_context import TrainingContext, activate_training_resolution
 from utils.coarse_to_fine import resolve_training_resolution_scale
 from utils.pose_aware_sampling import (
     build_pose_sampling_plan,
+    build_pose_sampling_plan_v1,
     build_repeated_camera_pool,
     load_test_camera_poses,
     resolve_test_pose_path,
@@ -148,19 +149,33 @@ def build_training_loop_state(
             str(getattr(opt, "pose_aware_test_poses", "")),
         )
         test_poses = load_test_camera_poses(test_pose_path)
-        sampling_plan = build_pose_sampling_plan(
-            train_cameras,
-            test_poses,
-            position_neighbor_count=int(getattr(opt, "pose_aware_position_k", 2)),
-            direction_neighbor_count=int(getattr(opt, "pose_aware_direction_k", 2)),
-            direction_radius=float(getattr(opt, "pose_aware_direction_radius", 3.0)),
-            extra_fraction=float(getattr(opt, "pose_aware_extra_fraction", 0.25)),
-            max_repeat=int(getattr(opt, "pose_aware_max_repeat", 2)),
-        )
+        pose_aware_mode = str(getattr(opt, "pose_aware_mode", "v2")).lower()
+        if pose_aware_mode == "v1":
+            sampling_plan = build_pose_sampling_plan_v1(
+                train_cameras,
+                test_poses,
+                neighbor_count=int(getattr(opt, "pose_aware_k", 3)),
+                extra_fraction=float(getattr(opt, "pose_aware_extra_fraction", 0.25)),
+                max_repeat=int(getattr(opt, "pose_aware_max_repeat", 2)),
+                angle_weight=float(getattr(opt, "pose_aware_angle_weight", 0.25)),
+            )
+        elif pose_aware_mode == "v2":
+            sampling_plan = build_pose_sampling_plan(
+                train_cameras,
+                test_poses,
+                position_neighbor_count=int(getattr(opt, "pose_aware_position_k", 2)),
+                direction_neighbor_count=int(getattr(opt, "pose_aware_direction_k", 2)),
+                direction_radius=float(getattr(opt, "pose_aware_direction_radius", 3.0)),
+                extra_fraction=float(getattr(opt, "pose_aware_extra_fraction", 0.25)),
+                max_repeat=int(getattr(opt, "pose_aware_max_repeat", 2)),
+            )
+        else:
+            raise ValueError(f"pose_aware_mode khong hop le: {pose_aware_mode}")
         viewpoint_repeat_counts = sampling_plan.repeat_counts
         print(
-            "Pose-aware sampling: {} train, {} test, +{} luot/pool {}, "
+            "Pose-aware sampling {}: {} train, {} test, +{} luot/pool {}, "
             "median spacing {:.3f}, max gap {:.2f}x spacing, max angle {:.1f} deg".format(
+                pose_aware_mode,
                 sampling_plan.train_count,
                 sampling_plan.test_count,
                 sampling_plan.extra_count,

@@ -15,6 +15,10 @@ Image = collections.namedtuple(
     "Image",
     ["id", "qvec", "tvec", "camera_id", "name", "xys", "point3D_ids"],
 )
+Point3D = collections.namedtuple(
+    "Point3D",
+    ["id", "xyz", "rgb", "error", "image_ids", "point2D_idxs"],
+)
 CAMERA_MODELS = {
     CameraModel(0, "SIMPLE_PINHOLE", 3),
     CameraModel(1, "PINHOLE", 4),
@@ -151,3 +155,93 @@ def read_extrinsics_binary(path: str | Path) -> dict[int, Image]:
                 point3D_ids=point3d_ids,
             )
     return images
+
+
+def read_points3d_binary(path: str | Path) -> dict[int, Point3D]:
+    """Doc point cloud sparse va track tu points3D.bin."""
+    points: dict[int, Point3D] = {}
+    with open(path, "rb") as handle:
+        point_count = _read_bytes(handle, 8, "Q")[0]
+        for _ in range(point_count):
+            properties = _read_bytes(handle, 43, "QdddBBBd")
+            point_id = int(properties[0])
+            track_length = _read_bytes(handle, 8, "Q")[0]
+            track = _read_bytes(handle, 8 * track_length, "ii" * track_length)
+            points[point_id] = Point3D(
+                id=point_id,
+                xyz=np.asarray(properties[1:4], dtype=np.float64),
+                rgb=np.asarray(properties[4:7], dtype=np.uint8),
+                error=float(properties[7]),
+                image_ids=np.asarray(track[0::2], dtype=np.int32),
+                point2D_idxs=np.asarray(track[1::2], dtype=np.int32),
+            )
+    return points
+
+
+def write_points3d_binary(points: dict[int, Point3D], path: str | Path) -> None:
+    """Ghi points3D.bin de ho tro kiem thu va model sparse nho."""
+    with open(path, "wb") as handle:
+        _write_bytes(handle, len(points), "Q")
+        for point_id in sorted(points):
+            point = points[point_id]
+            _write_bytes(
+                handle,
+                [
+                    int(point.id),
+                    *[float(value) for value in point.xyz],
+                    *[int(value) for value in point.rgb],
+                    float(point.error),
+                ],
+                "QdddBBBd",
+            )
+            if len(point.image_ids) != len(point.point2D_idxs):
+                raise ValueError(f"Track point {point.id} co do dai khong khop")
+            _write_bytes(handle, len(point.image_ids), "Q")
+            for image_id, point2d_index in zip(point.image_ids, point.point2D_idxs):
+                _write_bytes(handle, [int(image_id), int(point2d_index)], "ii")
+
+
+def write_point_cloud_ply(
+    path: str | Path,
+    xyz: np.ndarray,
+    rgb: np.ndarray,
+) -> None:
+    """Ghi PLY binary dung schema khoi tao Gaussian cua ImprovedGS."""
+    xyz = np.asarray(xyz, dtype=np.float32).reshape(-1, 3)
+    rgb = np.asarray(rgb, dtype=np.uint8).reshape(-1, 3)
+    if len(xyz) != len(rgb):
+        raise ValueError("So toa do va mau PLY khong khop")
+    vertex_dtype = np.dtype(
+        [
+            ("x", "<f4"),
+            ("y", "<f4"),
+            ("z", "<f4"),
+            ("nx", "<f4"),
+            ("ny", "<f4"),
+            ("nz", "<f4"),
+            ("red", "u1"),
+            ("green", "u1"),
+            ("blue", "u1"),
+        ]
+    )
+    vertices = np.zeros(len(xyz), dtype=vertex_dtype)
+    vertices["x"], vertices["y"], vertices["z"] = xyz.T
+    vertices["red"], vertices["green"], vertices["blue"] = rgb.T
+    header = (
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        f"element vertex {len(vertices)}\n"
+        "property float x\n"
+        "property float y\n"
+        "property float z\n"
+        "property float nx\n"
+        "property float ny\n"
+        "property float nz\n"
+        "property uchar red\n"
+        "property uchar green\n"
+        "property uchar blue\n"
+        "end_header\n"
+    )
+    with open(path, "wb") as handle:
+        handle.write(header.encode("ascii"))
+        handle.write(vertices.tobytes())

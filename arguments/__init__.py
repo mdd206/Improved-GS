@@ -215,6 +215,9 @@ class PoseAwareSamplingParams(ParamGroup):
     def __init__(self, parser: ArgumentParser) -> None:
         self.pose_aware_sampling = False  # Bat camera pool theo test pose
         self.pose_aware_test_poses = ""  # Duong dan CSV, rong thi dung test/test_poses.csv
+        self.pose_aware_mode = "v2"  # v1 dung chi phi ket hop cu, v2 tach vi tri va huong
+        self.pose_aware_k = 3  # So camera gan nhat cua pose-aware v1
+        self.pose_aware_angle_weight = 0.25  # Trong so goc 30 do cua pose-aware v1
         self.pose_aware_position_k = 2  # So camera gan nhat theo vi tri
         self.pose_aware_direction_k = 2  # So camera gan nhat theo huong nhin
         self.pose_aware_direction_radius = 3.0  # Ban kinh huong nhin theo camera spacing

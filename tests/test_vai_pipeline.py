@@ -21,9 +21,12 @@ from PIL import JpegImagePlugin
 from vai.colmap_io import (
     Camera,
     Image,
+    Point3D,
     read_extrinsics_binary,
+    read_points3d_binary,
     write_extrinsics_binary,
     write_intrinsics_binary,
+    write_points3d_binary,
 )
 from vai.common import output_name_for_pose, read_pose_rows
 from vai.distortion import redistort_and_crop, redistort_image
@@ -31,6 +34,7 @@ from vai.evaluation import compute_weighted_score
 from vai.image_processing import save_render_image, sharpen_image
 from vai.packaging import package_submission
 from vai.preprocessing import _synchronize_and_filter_images, preprocess_scene
+from vai.retriangulation import merge_sparse_points
 from utils.coarse_to_fine import (
     build_training_resolution_scales,
     resolve_training_resolution_scale,
@@ -39,6 +43,7 @@ from utils.coarse_to_fine import (
 from utils.pose_aware_sampling import (
     CameraPose,
     build_pose_sampling_plan,
+    build_pose_sampling_plan_v1,
     build_repeated_camera_pool,
     pose_from_csv_row,
 )
@@ -171,6 +176,32 @@ class PoseAwareSamplingTests(unittest.TestCase):
         self.assertTrue(all(any(item is camera for item in pool) for camera in cameras))
         self.assertEqual(sum(item is cameras[3] for item in pool), 2)
 
+    def test_v1_uses_old_combined_position_and_angle_cost(self) -> None:
+        cameras = [
+            SimpleNamespace(uid=0, camera_center=np.array([0.0, 0.0, 0.0]), R=np.eye(3)),
+            SimpleNamespace(
+                uid=1,
+                camera_center=np.array([0.1, 0.0, 0.0]),
+                R=np.diag([-1.0, 1.0, -1.0]),
+            ),
+        ]
+        test_poses = [
+            CameraPose(
+                center=np.array([0.08, 0.0, 0.0]),
+                forward=np.array([0.0, 0.0, 1.0]),
+            )
+        ]
+        plan = build_pose_sampling_plan_v1(
+            cameras,
+            test_poses,
+            neighbor_count=1,
+            extra_fraction=0.5,
+            max_repeat=2,
+            angle_weight=0.25,
+        )
+
+        self.assertEqual(plan.repeat_counts, {0: 2, 1: 1})
+
     def test_view_direction_can_override_a_small_position_advantage(self) -> None:
         cameras = [
             SimpleNamespace(uid=0, camera_center=np.array([0.0, 0.0, 0.0]), R=np.eye(3)),
@@ -258,6 +289,95 @@ class ColmapIoTests(unittest.TestCase):
             self.assertEqual(count, 1)
             self.assertEqual(list(loaded.values())[0].name, "a.png")
 
+    def test_points3d_binary_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "points3D.bin"
+            source = {
+                7: Point3D(
+                    id=7,
+                    xyz=np.array([1.0, 2.0, 3.0]),
+                    rgb=np.array([10, 20, 30], dtype=np.uint8),
+                    error=0.75,
+                    image_ids=np.array([2, 9], dtype=np.int32),
+                    point2D_idxs=np.array([3, 4], dtype=np.int32),
+                )
+            }
+            write_points3d_binary(source, path)
+            loaded = read_points3d_binary(path)
+            self.assertEqual(set(loaded), {7})
+            np.testing.assert_allclose(loaded[7].xyz, source[7].xyz)
+            np.testing.assert_array_equal(loaded[7].rgb, source[7].rgb)
+            np.testing.assert_array_equal(loaded[7].image_ids, source[7].image_ids)
+            self.assertAlmostEqual(loaded[7].error, 0.75)
+
+
+class RetriangulationTests(unittest.TestCase):
+    def test_merge_prefers_strong_original_then_new_then_weak_original(self) -> None:
+        original = {
+            1: Point3D(
+                id=1,
+                xyz=np.array([0.0, 0.0, 0.0]),
+                rgb=np.array([255, 0, 0], dtype=np.uint8),
+                error=0.5,
+                image_ids=np.array([1, 2], dtype=np.int32),
+                point2D_idxs=np.array([0, 0], dtype=np.int32),
+            ),
+            2: Point3D(
+                id=2,
+                xyz=np.array([10.0, 0.0, 0.0]),
+                rgb=np.array([0, 255, 0], dtype=np.uint8),
+                error=1.5,
+                image_ids=np.array([99], dtype=np.int32),
+                point2D_idxs=np.array([0], dtype=np.int32),
+            ),
+        }
+        triangulated = {
+            10: Point3D(
+                id=10,
+                xyz=np.array([10.001, 0.0, 0.0]),
+                rgb=np.array([0, 0, 255], dtype=np.uint8),
+                error=0.4,
+                image_ids=np.array([1, 2], dtype=np.int32),
+                point2D_idxs=np.array([0, 0], dtype=np.int32),
+            ),
+            11: Point3D(
+                id=11,
+                xyz=np.array([5.0, 0.0, 0.0]),
+                rgb=np.array([255, 255, 0], dtype=np.uint8),
+                error=0.6,
+                image_ids=np.array([1, 2, 3], dtype=np.int32),
+                point2D_idxs=np.array([0, 0, 0], dtype=np.int32),
+            ),
+            12: Point3D(
+                id=12,
+                xyz=np.array([6.0, 0.0, 0.0]),
+                rgb=np.array([255, 0, 255], dtype=np.uint8),
+                error=3.0,
+                image_ids=np.array([1, 2], dtype=np.int32),
+                point2D_idxs=np.array([0, 0], dtype=np.int32),
+            ),
+        }
+        xyz, rgb, stats = merge_sparse_points(
+            original,
+            triangulated,
+            {1, 2, 3},
+            max_reprojection_error=2.5,
+            min_track_length=2,
+            voxel_divisor=100.0,
+            max_points=10,
+        )
+
+        self.assertEqual(len(xyz), 3)
+        self.assertEqual(stats["accepted_triangulated_points"], 2)
+        self.assertEqual(stats["replaced_weak_original_voxels"], 1)
+        self.assertEqual(stats["added_voxel_points"], 1)
+        self.assertAlmostEqual(stats["growth_ratio"], 0.5)
+        colors = {tuple(color.tolist()) for color in rgb}
+        self.assertIn((255, 0, 0), colors)
+        self.assertIn((0, 0, 255), colors)
+        self.assertIn((255, 255, 0), colors)
+        self.assertNotIn((0, 255, 0), colors)
+
 
 class PreprocessingTests(unittest.TestCase):
     def test_scene_is_normalized_for_improvedgs(self) -> None:
@@ -338,24 +458,47 @@ class PreprocessingTests(unittest.TestCase):
                     output_path / "sparse" / "cameras.bin",
                 )
 
+            def fake_fixed_pose_cloud(**kwargs: object) -> dict[str, object]:
+                output_ply = Path(kwargs["output_ply"])
+                output_ply.write_bytes(b"ply\n")
+                return {
+                    "enabled": True,
+                    "poses_fixed": True,
+                    "original_points": 1,
+                    "triangulated_points": 2,
+                    "accepted_triangulated_points": 2,
+                    "merged_points": 2,
+                    "growth_ratio": 1.0,
+                }
+
             output_root = root / "cleaned"
             with patch("vai.preprocessing._check_colmap_executable"), patch(
                 "vai.preprocessing._run_colmap_undistorter",
                 side_effect=fake_undistorter,
+            ), patch(
+                "vai.preprocessing.build_fixed_pose_point_cloud",
+                side_effect=fake_fixed_pose_cloud,
             ):
-                result = preprocess_scene(source_scene, output_root)
+                result = preprocess_scene(
+                    source_scene,
+                    output_root,
+                    fixed_pose_retriangulation=True,
+                )
 
             output_scene = output_root / "HCM0204"
             self.assertEqual(result["scene_name"], "HCM0204")
             self.assertEqual(result["train_images"], 1)
+            self.assertEqual(result["initial_points"], 2)
             self.assertTrue((output_scene / "images" / "train.png").is_file())
             self.assertTrue((output_scene / "sparse" / "0" / "cameras.bin").is_file())
+            self.assertTrue((output_scene / "sparse" / "0" / "points3D.ply").is_file())
             with PilImage.open(output_scene / "images" / "train.png") as image:
                 self.assertEqual(image.mode, "RGBA")
             with open(output_scene / "vai_metadata.json", encoding="utf-8") as handle:
                 metadata = json.load(handle)
             self.assertEqual(metadata["original_camera"]["model"], "SIMPLE_RADIAL")
             self.assertEqual(metadata["undistorted_camera"]["model"], "PINHOLE")
+            self.assertTrue(metadata["fixed_pose_retriangulation"]["poses_fixed"])
 
 
 class DistortionTests(unittest.TestCase):
@@ -516,11 +659,12 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(train_config["coarse_to_fine_middle_iter"], 2000)
         self.assertEqual(train_config["coarse_to_fine_full_iter"], 5000)
         self.assertTrue(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["pose_aware_position_k"], 2)
-        self.assertEqual(train_config["pose_aware_direction_k"], 2)
-        self.assertEqual(train_config["pose_aware_direction_radius"], 3.0)
+        self.assertEqual(train_config["pose_aware_mode"], "v1")
+        self.assertEqual(train_config["pose_aware_k"], 3)
+        self.assertEqual(train_config["pose_aware_angle_weight"], 0.25)
         self.assertEqual(train_config["pose_aware_extra_fraction"], 0.25)
         self.assertEqual(train_config["pose_aware_max_repeat"], 2)
+        self.assertEqual(train_config["densify_grad_threshold"], 0.00020)
         self.assertEqual(train_config["budget"], 4_000_000)
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
@@ -531,14 +675,23 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertTrue(render_config["save_png"])
         self.assertIn("public_set", render_config["png_root"])
         notebook_source = "\n".join(code_cells)
-        self.assertIn("REPO_BRANCH = 'agent/pose-aware-sampling'", notebook_source)
+        self.assertIn(
+            "REPO_BRANCH = 'agent/fixed-pose-retriangulation'",
+            notebook_source,
+        )
         all_notebook_source = "\n".join(
             "".join(cell.get("source", []))
             for cell in notebook["cells"]
         )
-        self.assertIn("ImprovedGS + C2F + pose-aware v2 cho VAI public/private", all_notebook_source)
+        self.assertIn(
+            "P1: ImprovedGS + C2F + fixed-pose retriangulation + pose-aware cu",
+            all_notebook_source,
+        )
         self.assertIn("SCENE_NAMES = ['HCM0204']", notebook_source)
         self.assertIn("'--subset', *SELECTED_SCENES", notebook_source)
+        self.assertIn("'--overwrite'", notebook_source)
+        self.assertIn("'--fixed_pose_retriangulation'", notebook_source)
+        self.assertIn("'--retriangulation_min_growth_ratio', '0.20'", notebook_source)
         self.assertIn("f'{SET_NAME}_jpeg.zip'", notebook_source)
         self.assertIn("f'{SET_NAME}_png.zip'", notebook_source)
         self.assertGreaterEqual(notebook_source.count("'vai_package.py'"), 2)

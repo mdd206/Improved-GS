@@ -108,6 +108,93 @@ def _median_train_spacing(centers: np.ndarray) -> float:
     return max(spacing, 1e-8)
 
 
+def build_pose_sampling_plan_v1(
+    train_cameras: list[Any],
+    test_poses: list[CameraPose],
+    neighbor_count: int = 3,
+    extra_fraction: float = 0.25,
+    max_repeat: int = 2,
+    angle_weight: float = 0.25,
+) -> PoseSamplingPlan:
+    """Khoi phuc dung pose-aware cu: mot chi phi vi tri cong goc."""
+    if not train_cameras:
+        raise ValueError("Pose-aware sampling requires at least one training camera.")
+    if not test_poses:
+        raise ValueError("Pose-aware sampling requires at least one test pose.")
+    if int(neighbor_count) < 1:
+        raise ValueError("pose_aware_k must be at least 1.")
+    if not (0.0 <= float(extra_fraction) <= 1.0):
+        raise ValueError("pose_aware_extra_fraction must be in [0, 1].")
+    if int(max_repeat) < 1:
+        raise ValueError("pose_aware_max_repeat must be at least 1.")
+    if float(angle_weight) < 0.0:
+        raise ValueError("pose_aware_angle_weight must be non-negative.")
+
+    train_poses = [pose_from_training_camera(camera) for camera in train_cameras]
+    train_centers = np.stack([pose.center for pose in train_poses])
+    train_forwards = np.stack([pose.forward for pose in train_poses])
+    test_centers = np.stack([pose.center for pose in test_poses])
+    test_forwards = np.stack([pose.forward for pose in test_poses])
+    median_spacing = _median_train_spacing(train_centers)
+
+    position_distances = np.linalg.norm(
+        test_centers[:, None, :] - train_centers[None, :, :],
+        axis=2,
+    )
+    normalized_distances = position_distances / median_spacing
+    direction_dots = np.clip(test_forwards @ train_forwards.T, -1.0, 1.0)
+    angle_distances = np.arccos(direction_dots) / np.deg2rad(30.0)
+    combined_cost = normalized_distances + float(angle_weight) * angle_distances
+
+    k = min(int(neighbor_count), len(train_cameras))
+    importance = np.zeros((len(train_cameras),), dtype=np.float64)
+    nearest_gaps = np.min(normalized_distances, axis=1)
+    nearest_position_indices = np.argmin(normalized_distances, axis=1)
+    nearest_angle_gaps = angle_distances[
+        np.arange(len(test_poses)),
+        nearest_position_indices,
+    ]
+    for test_index in range(len(test_poses)):
+        nearest_indices = np.argsort(combined_cost[test_index], kind="stable")[:k]
+        difficulty = float(np.clip(nearest_gaps[test_index], 0.25, 5.0))
+        for rank, train_index in enumerate(nearest_indices):
+            importance[train_index] += difficulty / float(rank + 1)
+
+    repeat_counts = {
+        int(getattr(camera, "uid", index)): 1
+        for index, camera in enumerate(train_cameras)
+    }
+    max_extra = len(train_cameras) * (int(max_repeat) - 1)
+    requested_extra = int(round(len(train_cameras) * float(extra_fraction)))
+    remaining_extra = min(requested_extra, max_extra)
+    ranking = np.argsort(-importance, kind="stable")
+    while remaining_extra > 0:
+        allocated = 0
+        for train_index in ranking:
+            if importance[train_index] <= 0.0 or remaining_extra <= 0:
+                break
+            uid = int(getattr(train_cameras[int(train_index)], "uid", int(train_index)))
+            if repeat_counts[uid] >= int(max_repeat):
+                continue
+            repeat_counts[uid] += 1
+            remaining_extra -= 1
+            allocated += 1
+        if allocated == 0:
+            break
+
+    extra_count = sum(count - 1 for count in repeat_counts.values())
+    return PoseSamplingPlan(
+        repeat_counts=repeat_counts,
+        train_count=len(train_cameras),
+        test_count=len(test_poses),
+        extra_count=extra_count,
+        pool_size=len(train_cameras) + extra_count,
+        median_train_spacing=median_spacing,
+        max_test_gap=float(nearest_gaps.max()),
+        max_test_angle_gap_degrees=float(nearest_angle_gaps.max() * 30.0),
+    )
+
+
 def build_pose_sampling_plan(
     train_cameras: list[Any],
     test_poses: list[CameraPose],

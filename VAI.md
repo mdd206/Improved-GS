@@ -27,7 +27,13 @@ COLMAP CLI phai co trong `PATH`. Lenh sau chi xu ly HCM0204 va tao scene chuan t
 python vai_preprocess.py \
   --input /kaggle/input/datasets/xuanph/phase1/phase1/public_set \
   --output /kaggle/working/vai_cleaned \
-  --subset HCM0204
+  --subset HCM0204 \
+  --fixed_pose_retriangulation \
+  --retriangulation_max_reproj_error 2.5 \
+  --retriangulation_min_track_length 2 \
+  --retriangulation_voxel_divisor 6000 \
+  --retriangulation_max_points 600000 \
+  --retriangulation_min_growth_ratio 0.20
 ```
 
 Output co layout:
@@ -35,13 +41,23 @@ Output co layout:
 ```text
 vai_cleaned/HCM0204/
   images/                 # PNG RGBA da undistort
-  sparse/0/               # COLMAP PINHOLE da loc theo anh train
+  sparse/0/               # COLMAP PINHOLE va points3D.ply da hop nhat
   test/images/            # Public ground truth neu co
   test/test_poses.csv
-  vai_metadata.json       # Camera SIMPLE_RADIAL goc va camera PINHOLE moi
+  vai_metadata.json       # Camera va thong ke fixed-pose retriangulation
 ```
 
 Preprocess tao scene trong thu muc tam, validate xong moi thay output dich. Neu scene dich da ton tai, lenh se dung; chi dung `--overwrite` khi muon tao lai scene do.
+
+Voi P1, feature va exhaustive matching chi chay tren anh train. `point_triangulator`
+dung lai dung pose/intrinsic `SIMPLE_RADIAL` goc; pipeline se dung ngay neu COLMAP
+lam thay doi pose. Point moi phai co track it nhat 2 view va reprojection error
+khong qua 2.5 px. Sau do point moi duoc merge voxel voi sparse point goc theo thu
+tu uu tien: original co support tu 2 train view, point moi, roi original support
+0/1. Moi voxel original van duoc giu de khong xoa hinh hoc o vung test thua.
+Notebook dung som truoc train neu so voxel moi tang duoi 20%; thong ke day du nam
+trong `vai_metadata.json`. Cell preprocess cua notebook co `--overwrite` de chac
+chan khong tai su dung scene da preprocess boi thi nghiem truoc.
 
 Kiem tra lai output ma khong preprocess:
 
@@ -66,8 +82,10 @@ Config mac dinh trong notebook da dat:
 
 - `training_method=improvedgs`.
 - `coarse_to_fine=true`: train 1/4 resolution den iteration 2.000, 1/2 den 5.000, sau do dung full resolution.
-- `pose_aware_sampling=true`: giu moi train camera mot lan, chon rieng 2 camera gan vi tri va 2 camera gan huong nhin trong ban kinh 3 camera-spacing, roi lap them toi da mot lan cho khoang 25% camera.
-- `budget=4000000` cho thi nghiem pose-aware v2.
+- `pose_aware_sampling=true`, `pose_aware_mode=v1`: dung pose-aware cu, chon
+  `k=3` theo chi phi vi tri + `0.25 *` chi phi goc, roi lap them toi da mot lan
+  cho khoang 25% camera.
+- `densify_grad_threshold=0.00020` va `budget=4000000`.
 - `eval=false` de dung toan bo 240 anh train, khong LLFF-hold anh.
 - `data_device=cpu` de 240 anh va edge map khong chiem bo nho GPU Kaggle.
 - `postprocess_script=vai_render.py`.
