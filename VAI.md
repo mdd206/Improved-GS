@@ -59,6 +59,10 @@ Notebook dung som truoc train neu so voxel moi tang duoi 20%; thong ke day du na
 trong `vai_metadata.json`. Cell preprocess cua notebook co `--overwrite` de chac
 chan khong tai su dung scene da preprocess boi thi nghiem truoc.
 
+Tren Kaggle headless, P1 dat Qt thanh `offscreen` va chay SIFT extraction/matching
+tren CPU de khong phu thuoc OpenGL context. Code tu nhan ten option CPU cua ca
+COLMAP legacy va phien ban moi.
+
 Kiem tra lai output ma khong preprocess:
 
 ```bash

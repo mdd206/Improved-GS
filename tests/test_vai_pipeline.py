@@ -34,7 +34,11 @@ from vai.evaluation import compute_weighted_score
 from vai.image_processing import save_render_image, sharpen_image
 from vai.packaging import package_submission
 from vai.preprocessing import _synchronize_and_filter_images, preprocess_scene
-from vai.retriangulation import _run_colmap, merge_sparse_points
+from vai.retriangulation import (
+    _resolve_colmap_option,
+    _run_colmap,
+    merge_sparse_points,
+)
 from utils.coarse_to_fine import (
     build_training_resolution_scales,
     resolve_training_resolution_scale,
@@ -322,6 +326,22 @@ class RetriangulationTests(unittest.TestCase):
             run_mock.call_args.kwargs["env"]["QT_QPA_PLATFORM"],
             "offscreen",
         )
+
+    def test_colmap_cpu_option_supports_legacy_and_new_names(self) -> None:
+        with patch(
+            "vai.retriangulation.subprocess.run",
+            return_value=SimpleNamespace(
+                stdout="--SiftExtraction.use_gpu arg (=1)",
+                stderr="",
+            ),
+        ):
+            option = _resolve_colmap_option(
+                "colmap",
+                "feature_extractor",
+                ("--FeatureExtraction.use_gpu", "--SiftExtraction.use_gpu"),
+            )
+
+        self.assertEqual(option, "--SiftExtraction.use_gpu")
 
     def test_merge_prefers_strong_original_then_new_then_weak_original(self) -> None:
         original = {

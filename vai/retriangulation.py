@@ -45,6 +45,31 @@ def _run_colmap(command: list[str], stage: str) -> None:
         raise RuntimeError(f"COLMAP {stage} that bai:\n{details}") from error
 
 
+def _resolve_colmap_option(
+    executable: str,
+    command: str,
+    candidates: tuple[str, ...],
+) -> str:
+    """Chon ten option phu hop voi phien ban COLMAP dang cai."""
+    help_result = subprocess.run(
+        [executable, command, "-h"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=colmap_environment(),
+    )
+    help_text = (help_result.stdout or "") + (help_result.stderr or "")
+    for candidate in candidates:
+        if candidate in help_text:
+            return candidate
+    raise RuntimeError(
+        "COLMAP {} khong co option CPU nao trong: {}".format(
+            command,
+            ", ".join(candidates),
+        )
+    )
+
+
 def _database_image_rows(database_path: Path) -> list[tuple[int, str, int]]:
     """Doc image id, ten va camera id do feature extractor tao."""
     with sqlite3.connect(database_path) as connection:
@@ -327,6 +352,11 @@ def build_fixed_pose_point_cloud(
     try:
         database_path = temp_root / "database.db"
         camera_params = ",".join(f"{float(value):.17g}" for value in camera.params)
+        extraction_cpu_option = _resolve_colmap_option(
+            colmap_executable,
+            "feature_extractor",
+            ("--FeatureExtraction.use_gpu", "--SiftExtraction.use_gpu"),
+        )
         _run_colmap(
             [
                 colmap_executable,
@@ -341,6 +371,8 @@ def build_fixed_pose_point_cloud(
                 camera.model,
                 "--ImageReader.camera_params",
                 camera_params,
+                extraction_cpu_option,
+                "0",
             ],
             "feature_extractor",
         )
@@ -352,12 +384,19 @@ def build_fixed_pose_point_cloud(
             source_images,
             database_images,
         )
+        matching_cpu_option = _resolve_colmap_option(
+            colmap_executable,
+            "exhaustive_matcher",
+            ("--FeatureMatching.use_gpu", "--SiftMatching.use_gpu"),
+        )
         _run_colmap(
             [
                 colmap_executable,
                 "exhaustive_matcher",
                 "--database_path",
                 str(database_path),
+                matching_cpu_option,
+                "0",
             ],
             "exhaustive_matcher",
         )
@@ -425,6 +464,8 @@ def build_fixed_pose_point_cloud(
                 "enabled": True,
                 "poses_fixed": True,
                 "matching": "exhaustive",
+                "feature_device": "cpu",
+                "matching_device": "cpu",
                 "database_images": len(database_images),
                 "max_pose_delta": float(max_pose_delta),
                 "max_intrinsic_delta": float(intrinsic_delta),

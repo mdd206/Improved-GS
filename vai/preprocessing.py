@@ -317,7 +317,9 @@ def preprocess_scene(
         retriangulation_stats: dict[str, Any] | None = None
         merged_ply = work_scene / "fixed_pose_points3D.ply"
         if fixed_pose_retriangulation:
-            print("  P1: extract feature, exhaustive match va triangulate voi pose co dinh...")
+            print(
+                "  P1: SIFT CPU, exhaustive match CPU va triangulate voi pose co dinh..."
+            )
             retriangulation_stats = build_fixed_pose_point_cloud(
                 image_dir=work_scene / "images",
                 sparse_dir=work_scene / "sparse" / "0",
