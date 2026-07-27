@@ -68,17 +68,21 @@ def _run_colmap_undistorter(
         "--max_scale",
         str(max_scale),
     ]
+    print("  COLMAP image_undistorter bat dau...", flush=True)
     try:
         subprocess.run(
             command,
             check=True,
-            capture_output=True,
             text=True,
             env=colmap_environment(),
         )
     except subprocess.CalledProcessError as error:
-        details = (error.stderr or error.stdout or "").strip()
-        raise RuntimeError(f"COLMAP image_undistorter that bai:\n{details}") from error
+        raise RuntimeError(
+            "COLMAP image_undistorter that bai voi ma {}. Xem log ngay phia tren.".format(
+                error.returncode
+            )
+        ) from error
+    print("  COLMAP image_undistorter xong.", flush=True)
 
 
 def _files_by_stem(folder: Path) -> dict[str, Path]:
@@ -291,6 +295,7 @@ def preprocess_scene(
     retriangulation_voxel_divisor: float = 6_000.0,
     retriangulation_max_points: int = 600_000,
     retriangulation_min_growth_ratio: float = 0.0,
+    retriangulation_sift_device: str = "gpu",
 ) -> dict[str, Any]:
     """Chuyen mot scene raw VAI thanh scene ImprovedGS co metadata distortion."""
     source_scene = Path(source_scene)
@@ -318,7 +323,10 @@ def preprocess_scene(
         merged_ply = work_scene / "fixed_pose_points3D.ply"
         if fixed_pose_retriangulation:
             print(
-                "  P1: SIFT CPU, exhaustive match CPU va triangulate voi pose co dinh..."
+                "  P1: SIFT va exhaustive match tren {}, triangulate voi pose co dinh...".format(
+                    str(retriangulation_sift_device).upper()
+                ),
+                flush=True,
             )
             retriangulation_stats = build_fixed_pose_point_cloud(
                 image_dir=work_scene / "images",
@@ -330,6 +338,7 @@ def preprocess_scene(
                 voxel_divisor=retriangulation_voxel_divisor,
                 max_points=retriangulation_max_points,
                 min_growth_ratio=retriangulation_min_growth_ratio,
+                sift_device=retriangulation_sift_device,
             )
             print(
                 "  P1: original={} triangulated={}/{} merged={} growth={:.1%}".format(
@@ -338,7 +347,8 @@ def preprocess_scene(
                     retriangulation_stats["triangulated_points"],
                     retriangulation_stats["merged_points"],
                     retriangulation_stats["growth_ratio"],
-                )
+                ),
+                flush=True,
             )
 
         embedded_count, registered_count = _replace_with_undistorted_scene(
@@ -412,7 +422,7 @@ def preprocess_dataset(
 
     results = []
     for scene_dir in selected:
-        print(f"Preprocessing VAI scene {scene_dir.name}...")
+        print(f"Preprocessing VAI scene {scene_dir.name}...", flush=True)
         result = preprocess_scene(scene_dir, output_root, **options)
         results.append(result)
         print(
@@ -421,6 +431,7 @@ def preprocess_dataset(
                 result["test_poses"],
                 result["camera"]["model"],
                 result["output_path"],
-            )
+            ),
+            flush=True,
         )
     return results

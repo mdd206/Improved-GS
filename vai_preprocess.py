@@ -24,6 +24,11 @@ def main() -> int:
     parser.add_argument("--retriangulation_voxel_divisor", type=float, default=6_000.0)
     parser.add_argument("--retriangulation_max_points", type=int, default=600_000)
     parser.add_argument("--retriangulation_min_growth_ratio", type=float, default=0.0)
+    parser.add_argument(
+        "--retriangulation_sift_device",
+        choices=("gpu", "cpu"),
+        default="gpu",
+    )
     parser.add_argument("--validate_only", action="store_true")
     args = parser.parse_args()
 
@@ -48,6 +53,7 @@ def main() -> int:
             retriangulation_voxel_divisor=args.retriangulation_voxel_divisor,
             retriangulation_max_points=args.retriangulation_max_points,
             retriangulation_min_growth_ratio=args.retriangulation_min_growth_ratio,
+            retriangulation_sift_device=args.retriangulation_sift_device,
         )
     print(json.dumps(results, ensure_ascii=False, indent=2))
     return 0

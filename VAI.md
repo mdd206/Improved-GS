@@ -33,7 +33,8 @@ python vai_preprocess.py \
   --retriangulation_min_track_length 2 \
   --retriangulation_voxel_divisor 6000 \
   --retriangulation_max_points 600000 \
-  --retriangulation_min_growth_ratio 0.20
+  --retriangulation_min_growth_ratio 0.20 \
+  --retriangulation_sift_device gpu
 ```
 
 Output co layout:
@@ -59,9 +60,12 @@ Notebook dung som truoc train neu so voxel moi tang duoi 20%; thong ke day du na
 trong `vai_metadata.json`. Cell preprocess cua notebook co `--overwrite` de chac
 chan khong tai su dung scene da preprocess boi thi nghiem truoc.
 
-Tren Kaggle headless, P1 dat Qt thanh `offscreen` va chay SIFT extraction/matching
-tren CPU de khong phu thuoc OpenGL context. Code tu nhan ten option CPU cua ca
-COLMAP legacy va phien ban moi.
+P1 mac dinh chay SIFT extraction/matching tren GPU. Tren Kaggle headless, hai
+lenh GPU duoc boc bang `xvfb-run` de COLMAP tao duoc OpenGL context ma khong can
+man hinh vat ly. Notebook cai ro `xvfb` va `xauth`, goi preprocess bang Python
+unbuffered, va stream log cua tung stage COLMAP. Co the chuyen ve CPU bang
+`--retriangulation_sift_device cpu` khi can chan doan. Code tu nhan ten option
+GPU/CPU cua ca COLMAP legacy va phien ban moi.
 
 Kiem tra lai output ma khong preprocess:
 

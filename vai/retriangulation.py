@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,27 +23,58 @@ from vai.colmap_io import (
 )
 
 
-def colmap_environment() -> dict[str, str]:
-    """Tao environment Qt headless cho COLMAP tren Kaggle."""
+def colmap_environment(use_virtual_display: bool = False) -> dict[str, str]:
+    """Tao environment Qt phu hop cho COLMAP tren Kaggle."""
     environment = os.environ.copy()
-    if not environment.get("DISPLAY"):
+    if use_virtual_display:
+        # xvfb-run se tu dat DISPLAY; bo offscreen de Qt dung X11 ao.
+        environment.pop("QT_QPA_PLATFORM", None)
+    elif not environment.get("DISPLAY"):
         environment["QT_QPA_PLATFORM"] = "offscreen"
     return environment
 
 
-def _run_colmap(command: list[str], stage: str) -> None:
-    """Chay mot buoc COLMAP va gom loi thanh thong bao de doc."""
+def _run_colmap(command: list[str], stage: str, use_gpu: bool = False) -> None:
+    """Chay COLMAP, stream log va boc GPU headless bang Xvfb khi can."""
+    actual_command = list(command)
+    use_virtual_display = bool(use_gpu and not os.environ.get("DISPLAY"))
+    if use_virtual_display:
+        xvfb_run = shutil.which("xvfb-run")
+        if xvfb_run is None:
+            raise FileNotFoundError(
+                "P1 GPU tren may headless can xvfb-run. Hay cai goi xvfb va xauth."
+            )
+        actual_command = [xvfb_run, "-a", *actual_command]
+
+    started_at = time.monotonic()
+    print(
+        "  COLMAP {} bat dau tren {}...".format(
+            stage,
+            "GPU" if use_gpu else "CPU",
+        ),
+        flush=True,
+    )
     try:
         subprocess.run(
-            command,
+            actual_command,
             check=True,
-            capture_output=True,
             text=True,
-            env=colmap_environment(),
+            env=colmap_environment(use_virtual_display=use_virtual_display),
         )
     except subprocess.CalledProcessError as error:
-        details = (error.stderr or error.stdout or "").strip()
-        raise RuntimeError(f"COLMAP {stage} that bai:\n{details}") from error
+        raise RuntimeError(
+            "COLMAP {} that bai voi ma {}. Xem log ngay phia tren.".format(
+                stage,
+                error.returncode,
+            )
+        ) from error
+    print(
+        "  COLMAP {} xong sau {:.1f} giay.".format(
+            stage,
+            time.monotonic() - started_at,
+        ),
+        flush=True,
+    )
 
 
 def _resolve_colmap_option(
@@ -63,7 +95,7 @@ def _resolve_colmap_option(
         if candidate in help_text:
             return candidate
     raise RuntimeError(
-        "COLMAP {} khong co option CPU nao trong: {}".format(
+        "COLMAP {} khong co option GPU/CPU nao trong: {}".format(
             command,
             ", ".join(candidates),
         )
@@ -332,6 +364,7 @@ def build_fixed_pose_point_cloud(
     voxel_divisor: float = 6_000.0,
     max_points: int = 600_000,
     min_growth_ratio: float = 0.0,
+    sift_device: str = "gpu",
 ) -> dict[str, Any]:
     """Triangulate lai tu train view va ghi PLY hop nhat cho khoi tao Gaussian."""
     image_dir = Path(image_dir)
@@ -347,12 +380,16 @@ def build_fixed_pose_point_cloud(
         raise ValueError(f"Camera model khong duoc ho tro: {camera.model}")
     source_images = read_extrinsics_binary(sparse_dir / "images.bin")
     original_points = read_points3d_binary(sparse_dir / "points3D.bin")
+    normalized_sift_device = str(sift_device).strip().lower()
+    if normalized_sift_device not in {"gpu", "cpu"}:
+        raise ValueError("retriangulation_sift_device phai la gpu hoac cpu")
+    use_sift_gpu = normalized_sift_device == "gpu"
 
     temp_root = Path(tempfile.mkdtemp(prefix="vai-retriangulate-"))
     try:
         database_path = temp_root / "database.db"
         camera_params = ",".join(f"{float(value):.17g}" for value in camera.params)
-        extraction_cpu_option = _resolve_colmap_option(
+        extraction_device_option = _resolve_colmap_option(
             colmap_executable,
             "feature_extractor",
             ("--FeatureExtraction.use_gpu", "--SiftExtraction.use_gpu"),
@@ -371,10 +408,11 @@ def build_fixed_pose_point_cloud(
                 camera.model,
                 "--ImageReader.camera_params",
                 camera_params,
-                extraction_cpu_option,
-                "0",
+                extraction_device_option,
+                "1" if use_sift_gpu else "0",
             ],
             "feature_extractor",
+            use_gpu=use_sift_gpu,
         )
         database_images = _database_image_rows(database_path)
         fixed_model = temp_root / "fixed_model"
@@ -384,7 +422,7 @@ def build_fixed_pose_point_cloud(
             source_images,
             database_images,
         )
-        matching_cpu_option = _resolve_colmap_option(
+        matching_device_option = _resolve_colmap_option(
             colmap_executable,
             "exhaustive_matcher",
             ("--FeatureMatching.use_gpu", "--SiftMatching.use_gpu"),
@@ -395,10 +433,11 @@ def build_fixed_pose_point_cloud(
                 "exhaustive_matcher",
                 "--database_path",
                 str(database_path),
-                matching_cpu_option,
-                "0",
+                matching_device_option,
+                "1" if use_sift_gpu else "0",
             ],
             "exhaustive_matcher",
+            use_gpu=use_sift_gpu,
         )
         triangulated_model = temp_root / "triangulated_model"
         triangulated_model.mkdir()
@@ -464,8 +503,11 @@ def build_fixed_pose_point_cloud(
                 "enabled": True,
                 "poses_fixed": True,
                 "matching": "exhaustive",
-                "feature_device": "cpu",
-                "matching_device": "cpu",
+                "feature_device": normalized_sift_device,
+                "matching_device": normalized_sift_device,
+                "gpu_virtual_display": bool(
+                    use_sift_gpu and not os.environ.get("DISPLAY")
+                ),
                 "database_images": len(database_images),
                 "max_pose_delta": float(max_pose_delta),
                 "max_intrinsic_delta": float(intrinsic_delta),

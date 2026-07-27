@@ -327,7 +327,7 @@ class RetriangulationTests(unittest.TestCase):
             "offscreen",
         )
 
-    def test_colmap_cpu_option_supports_legacy_and_new_names(self) -> None:
+    def test_colmap_device_option_supports_legacy_and_new_names(self) -> None:
         with patch(
             "vai.retriangulation.subprocess.run",
             return_value=SimpleNamespace(
@@ -342,6 +342,38 @@ class RetriangulationTests(unittest.TestCase):
             )
 
         self.assertEqual(option, "--SiftExtraction.use_gpu")
+
+    def test_colmap_gpu_uses_xvfb_without_display(self) -> None:
+        with patch.dict("vai.retriangulation.os.environ", {}, clear=True), patch(
+            "vai.retriangulation.shutil.which",
+            return_value="/usr/bin/xvfb-run",
+        ), patch("vai.retriangulation.subprocess.run") as run_mock:
+            _run_colmap(
+                ["colmap", "feature_extractor"],
+                "feature_extractor",
+                use_gpu=True,
+            )
+
+        self.assertEqual(
+            run_mock.call_args.args[0],
+            ["/usr/bin/xvfb-run", "-a", "colmap", "feature_extractor"],
+        )
+        self.assertNotIn(
+            "QT_QPA_PLATFORM",
+            run_mock.call_args.kwargs["env"],
+        )
+
+    def test_colmap_gpu_requires_xvfb_without_display(self) -> None:
+        with patch.dict("vai.retriangulation.os.environ", {}, clear=True), patch(
+            "vai.retriangulation.shutil.which",
+            return_value=None,
+        ):
+            with self.assertRaises(FileNotFoundError):
+                _run_colmap(
+                    ["colmap", "feature_extractor"],
+                    "feature_extractor",
+                    use_gpu=True,
+                )
 
     def test_merge_prefers_strong_original_then_new_then_weak_original(self) -> None:
         original = {
@@ -489,7 +521,10 @@ class PreprocessingTests(unittest.TestCase):
                     output_path / "sparse" / "cameras.bin",
                 )
 
+            fixed_pose_calls: list[dict[str, object]] = []
+
             def fake_fixed_pose_cloud(**kwargs: object) -> dict[str, object]:
+                fixed_pose_calls.append(kwargs)
                 output_ply = Path(kwargs["output_ply"])
                 output_ply.write_bytes(b"ply\n")
                 return {
@@ -520,6 +555,7 @@ class PreprocessingTests(unittest.TestCase):
             self.assertEqual(result["scene_name"], "HCM0204")
             self.assertEqual(result["train_images"], 1)
             self.assertEqual(result["initial_points"], 2)
+            self.assertEqual(fixed_pose_calls[0]["sift_device"], "gpu")
             self.assertTrue((output_scene / "images" / "train.png").is_file())
             self.assertTrue((output_scene / "sparse" / "0" / "cameras.bin").is_file())
             self.assertTrue((output_scene / "sparse" / "0" / "points3D.ply").is_file())
@@ -723,10 +759,16 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertIn("'--overwrite'", notebook_source)
         self.assertIn("'--fixed_pose_retriangulation'", notebook_source)
         self.assertIn("'--retriangulation_min_growth_ratio', '0.20'", notebook_source)
+        self.assertIn("'--retriangulation_sift_device', 'gpu'", notebook_source)
+        self.assertIn("sys.executable, '-u', 'vai_preprocess.py'", notebook_source)
         self.assertIn("f'{SET_NAME}_jpeg.zip'", notebook_source)
         self.assertIn("f'{SET_NAME}_png.zip'", notebook_source)
         self.assertGreaterEqual(notebook_source.count("'vai_package.py'"), 2)
         self.assertIn("'--no-install-recommends', 'colmap'", notebook_source)
+        self.assertIn("'colmap', 'xvfb', 'xauth'", notebook_source)
+        self.assertIn("'MAX_JOBS'] = '2'", notebook_source)
+        self.assertNotIn("'numpy==1.26.1'", notebook_source)
+        self.assertNotIn("'opencv-python==4.10.0.82'", notebook_source)
         self.assertIn("install_colmap_with_conda", notebook_source)
         self.assertNotIn("'install', '-y', '-qq', 'colmap'", notebook_source)
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
