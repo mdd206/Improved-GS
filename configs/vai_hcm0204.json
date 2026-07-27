@@ -1,6 +1,6 @@
 {
-  "data_root": "/kaggle/working/vai_cleaned",
-  "output_root": "/kaggle/working/vai_models",
+  "data_root": "/kaggle/working/vai_cleaned_no_p1/public_set",
+  "output_root": "/kaggle/working/vai_models/pose_aware_60k_5m5/public_set",
   "repeat": 1,
   "python_executable": "python",
   "gpu_auto_select": false,
@@ -9,10 +9,15 @@
   "run_postprocess": true,
   "postprocess_script": "vai_render.py",
   "select_best_repeat_by_psnr": false,
+  "checkpoint_args": {
+    "checkpoint_iterations": [30000]
+  },
 
   "train_args": {
     "training_method": "improvedgs",
-    "iterations": 30000,
+    "iterations": 60000,
+    "save_iterations": [30000, 45000, 60000],
+    "position_lr_max_steps": 30000,
     "coarse_to_fine": true,
     "coarse_to_fine_middle_iter": 2000,
     "coarse_to_fine_full_iter": 5000,
@@ -26,18 +31,18 @@
     "eval": false,
     "resolution": -1,
     "data_device": "cpu",
-    "budget": 4000000,
+    "budget": 5500000,
     "progress_bar_width": 100,
     "report_lpips_test": false,
     "report_lpips_train": false
   },
 
   "postprocess_args": {
-    "output_root": "/kaggle/working/vai_renders",
-    "eval_root": "/kaggle/working/vai_eval",
+    "output_root": "/kaggle/working/vai_renders/pose_aware_60k_5m5/public_set",
+    "eval_root": "/kaggle/working/vai_eval/pose_aware_60k_5m5/public_set",
     "output_extension": "csv",
     "save_png": true,
-    "png_root": "/kaggle/working/vai_png",
+    "png_root": "/kaggle/working/vai_png/pose_aware_60k_5m5/public_set",
     "redistort_interpolation": "bicubic",
     "sharpen_amount": 1.0,
     "sharpen_sigma": 0.60,

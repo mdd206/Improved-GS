@@ -668,6 +668,8 @@ class ImageProcessingTests(unittest.TestCase):
             for cell in notebook["cells"]
             if cell["cell_type"] == "code"
         ]
+        for index, source in enumerate(code_cells):
+            compile(source, f"vai_hcm0204.ipynb:cell_{index}", "exec")
         config_cells = [source for source in code_cells if "VAI_CONFIG =" in source]
         self.assertEqual(len(config_cells), 1)
 
@@ -722,6 +724,10 @@ class ImageProcessingTests(unittest.TestCase):
 
         render_config = config["postprocess_args"]
         train_config = config["train_args"]
+        self.assertEqual(config["checkpoint_args"]["checkpoint_iterations"], [30000])
+        self.assertEqual(train_config["iterations"], 60000)
+        self.assertEqual(train_config["save_iterations"], [30000, 45000, 60000])
+        self.assertEqual(train_config["position_lr_max_steps"], 30000)
         self.assertTrue(train_config["coarse_to_fine"])
         self.assertEqual(train_config["coarse_to_fine_middle_iter"], 2000)
         self.assertEqual(train_config["coarse_to_fine_full_iter"], 5000)
@@ -732,7 +738,9 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(train_config["pose_aware_extra_fraction"], 0.25)
         self.assertEqual(train_config["pose_aware_max_repeat"], 2)
         self.assertEqual(train_config["densify_grad_threshold"], 0.00020)
-        self.assertEqual(train_config["budget"], 4_000_000)
+        self.assertEqual(train_config["budget"], 5_500_000)
+        self.assertIn("vai_cleaned_no_p1", config["data_root"])
+        self.assertIn("pose_aware_60k_5m5", config["output_root"])
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -741,9 +749,18 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["output_extension"], "csv")
         self.assertTrue(render_config["save_png"])
         self.assertIn("public_set", render_config["png_root"])
+        self.assertIn("pose_aware_60k_5m5", render_config["png_root"])
         notebook_source = "\n".join(code_cells)
         self.assertIn(
-            "REPO_BRANCH = 'agent/fixed-pose-retriangulation'",
+            "REPO_BRANCH = 'agent/pose-aware-60k-5m5'",
+            notebook_source,
+        )
+        self.assertIn(
+            "'checkout', REPO_BRANCH",
+            notebook_source,
+        )
+        self.assertIn(
+            "'pull', '--ff-only', 'origin', REPO_BRANCH",
             notebook_source,
         )
         all_notebook_source = "\n".join(
@@ -751,21 +768,22 @@ class ImageProcessingTests(unittest.TestCase):
             for cell in notebook["cells"]
         )
         self.assertIn(
-            "P1: ImprovedGS + C2F + fixed-pose retriangulation + pose-aware cu",
+            "ImprovedGS + C2F + pose-aware v1, dense 0.0002, 60k, budget 5.5M",
             all_notebook_source,
         )
         self.assertIn("SCENE_NAMES = ['HCM0204']", notebook_source)
         self.assertIn("'--subset', *SELECTED_SCENES", notebook_source)
         self.assertIn("'--overwrite'", notebook_source)
-        self.assertIn("'--fixed_pose_retriangulation'", notebook_source)
-        self.assertIn("'--retriangulation_min_growth_ratio', '0.20'", notebook_source)
-        self.assertIn("'--retriangulation_sift_device', 'gpu'", notebook_source)
+        self.assertNotIn("'--fixed_pose_retriangulation'", notebook_source)
+        self.assertNotIn("'--retriangulation_min_growth_ratio'", notebook_source)
+        self.assertNotIn("'--retriangulation_sift_device'", notebook_source)
         self.assertIn("sys.executable, '-u', 'vai_preprocess.py'", notebook_source)
-        self.assertIn("f'{SET_NAME}_jpeg.zip'", notebook_source)
-        self.assertIn("f'{SET_NAME}_png.zip'", notebook_source)
+        self.assertIn("f'{SET_NAME}_{EXPERIMENT_NAME}_jpeg.zip'", notebook_source)
+        self.assertIn("f'{SET_NAME}_{EXPERIMENT_NAME}_png.zip'", notebook_source)
         self.assertGreaterEqual(notebook_source.count("'vai_package.py'"), 2)
         self.assertIn("'--no-install-recommends', 'colmap'", notebook_source)
-        self.assertIn("'colmap', 'xvfb', 'xauth'", notebook_source)
+        self.assertNotIn("'xvfb'", notebook_source)
+        self.assertNotIn("'xauth'", notebook_source)
         self.assertIn("'MAX_JOBS'] = '2'", notebook_source)
         self.assertNotIn("'numpy==1.26.1'", notebook_source)
         self.assertNotIn("'opencv-python==4.10.0.82'", notebook_source)
@@ -773,6 +791,23 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertNotIn("'install', '-y', '-qq', 'colmap'", notebook_source)
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
+
+    def test_hcm0204_template_matches_pose_aware_60k_experiment(self) -> None:
+        config_path = Path(__file__).resolve().parents[1] / "configs" / "vai_hcm0204.json"
+        with open(config_path, encoding="utf-8") as handle:
+            config = json.load(handle)
+
+        train_config = config["train_args"]
+        self.assertEqual(train_config["iterations"], 60000)
+        self.assertEqual(train_config["save_iterations"], [30000, 45000, 60000])
+        self.assertEqual(train_config["position_lr_max_steps"], 30000)
+        self.assertTrue(train_config["pose_aware_sampling"])
+        self.assertEqual(train_config["pose_aware_mode"], "v1")
+        self.assertEqual(train_config["densify_grad_threshold"], 0.00020)
+        self.assertEqual(train_config["budget"], 5_500_000)
+        self.assertEqual(config["checkpoint_args"]["checkpoint_iterations"], [30000])
+        self.assertIn("vai_cleaned_no_p1", config["data_root"])
+        self.assertIn("pose_aware_60k_5m5", config["output_root"])
 
 
 class EdgeMaskTests(unittest.TestCase):
