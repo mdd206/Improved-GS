@@ -1094,10 +1094,13 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(train_config["position_lr_max_steps"], 30000)
         self.assertFalse(train_config["coarse_to_fine"])
         self.assertFalse(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["densify_grad_threshold"], 0.0025)
+        self.assertEqual(train_config["densify_grad_threshold"], 0.00025)
         self.assertEqual(train_config["budget"], 5_500_000)
-        self.assertIn("vai_native_simple_radial", config["data_root"])
-        self.assertIn("d3_native_simple_radial_improvedgs_30k_5m5_dense0025", config["output_root"])
+        self.assertIn("vai_mvsplat_init_native_simple_radial", config["data_root"])
+        self.assertIn(
+            "mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025",
+            config["output_root"],
+        )
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -1106,10 +1109,13 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["output_extension"], "csv")
         self.assertTrue(render_config["save_png"])
         self.assertIn("public_set", render_config["png_root"])
-        self.assertIn("d3_native_simple_radial_improvedgs_30k_5m5_dense0025", render_config["png_root"])
+        self.assertIn(
+            "mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025",
+            render_config["png_root"],
+        )
         notebook_source = "\n".join(code_cells)
         self.assertIn(
-            "REPO_BRANCH = 'agent/d3-native-simple-radial-improvedgs-5m5'",
+            "REPO_BRANCH = 'agent/mvsplat-init-improvedgs'",
             notebook_source,
         )
         self.assertIn(
@@ -1125,7 +1131,8 @@ class ImageProcessingTests(unittest.TestCase):
             for cell in notebook["cells"]
         )
         self.assertIn(
-            "D3: native SIMPLE_RADIAL + ImprovedGS, dense 0.0025, 30k, budget 5.5M",
+            "MVSplat-init + native SIMPLE_RADIAL + ImprovedGS thuan, "
+            "dense 0.00025, 30k, budget 5.5M",
             all_notebook_source,
         )
         self.assertIn("SCENE_NAMES = ['HCM0204']", notebook_source)
@@ -1136,6 +1143,17 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertNotIn("'--retriangulation_min_growth_ratio'", notebook_source)
         self.assertNotIn("'--retriangulation_sift_device'", notebook_source)
         self.assertIn("sys.executable, '-u', 'vai_preprocess.py'", notebook_source)
+        self.assertIn("sys.executable, '-u', 'vai_mvsplat_init.py'", notebook_source)
+        self.assertIn("'--mvsplat_repo', str(MVSPLAT_DIR)", notebook_source)
+        self.assertIn("'--checkpoint_sha256', MVSPLAT_CHECKPOINT_SHA256", notebook_source)
+        self.assertIn("'--max_pairs', str(MVSPLAT_MAX_PAIRS)", notebook_source)
+        self.assertIn("'--mixed_precision', MVSPLAT_MIXED_PRECISION", notebook_source)
+        self.assertIn(
+            "MVSPLAT_COMMIT = '01f9a28edb5eb68416e7e63b01f8d90c3bdfbf01'",
+            notebook_source,
+        )
+        self.assertNotIn("hf_edge_weighted_loss", notebook_source)
+        self.assertNotIn("hf_scale_aware_refinement", notebook_source)
         self.assertIn("f'{SET_NAME}_{EXPERIMENT_NAME}_jpeg.zip'", notebook_source)
         self.assertIn("f'{SET_NAME}_{EXPERIMENT_NAME}_png.zip'", notebook_source)
         self.assertGreaterEqual(notebook_source.count("'vai_package.py'"), 2)
@@ -1151,7 +1169,7 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 
-    def test_hcm0204_template_matches_d3_experiment(self) -> None:
+    def test_hcm0204_template_matches_mvsplat_init_experiment(self) -> None:
         config_path = Path(__file__).resolve().parents[1] / "configs" / "vai_hcm0204.json"
         with open(config_path, encoding="utf-8") as handle:
             config = json.load(handle)
@@ -1162,10 +1180,13 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(train_config["position_lr_max_steps"], 30000)
         self.assertFalse(train_config["coarse_to_fine"])
         self.assertFalse(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["densify_grad_threshold"], 0.0025)
+        self.assertEqual(train_config["densify_grad_threshold"], 0.00025)
         self.assertEqual(train_config["budget"], 5_500_000)
-        self.assertIn("vai_native_simple_radial", config["data_root"])
-        self.assertIn("d3_native_simple_radial_improvedgs_30k_5m5_dense0025", config["output_root"])
+        self.assertIn("vai_mvsplat_init_native_simple_radial", config["data_root"])
+        self.assertIn(
+            "mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025",
+            config["output_root"],
+        )
 
 
 class EdgeMaskTests(unittest.TestCase):

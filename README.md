@@ -28,6 +28,8 @@ For detailed project documentation, see: [Detailed project usage guide](PROJECT.
 For the Viettel AI Race `SIMPLE_RADIAL` data pipeline, including preprocessing,
 CSV-pose rendering, public-set evaluation, and submission packaging, see:
 [VAI pipeline guide](VAI.md).
+The guide also documents the optional geometry-only MVSplat initializer used
+before otherwise unmodified ImprovedGS training.
 
 ## Installation and Environment Setup
 
