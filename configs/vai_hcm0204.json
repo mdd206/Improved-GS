@@ -1,5 +1,5 @@
 {
-  "data_root": "/kaggle/working/vai_native_simple_radial/public_set",
+  "data_root": "/kaggle/working/vai_cleaned",
   "output_root": "/kaggle/working/vai_models/hfgs_edge_scale_improvedgs_30k_5m5_dense00025/public_set",
   "repeat": 1,
   "python_executable": "python",

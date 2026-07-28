@@ -18,22 +18,6 @@ def main() -> int:
     parser.add_argument("--min_scale", type=float, default=1.0)
     parser.add_argument("--max_scale", type=float, default=2.0)
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument(
-        "--native_simple_radial",
-        action="store_true",
-        help="Giu anh va camera SIMPLE_RADIAL goc, khong chay image_undistorter",
-    )
-    parser.add_argument("--fixed_pose_retriangulation", action="store_true")
-    parser.add_argument("--retriangulation_max_reproj_error", type=float, default=2.5)
-    parser.add_argument("--retriangulation_min_track_length", type=int, default=2)
-    parser.add_argument("--retriangulation_voxel_divisor", type=float, default=6_000.0)
-    parser.add_argument("--retriangulation_max_points", type=int, default=600_000)
-    parser.add_argument("--retriangulation_min_growth_ratio", type=float, default=0.0)
-    parser.add_argument(
-        "--retriangulation_sift_device",
-        choices=("gpu", "cpu"),
-        default="gpu",
-    )
     parser.add_argument("--validate_only", action="store_true")
     args = parser.parse_args()
 
@@ -52,14 +36,6 @@ def main() -> int:
             min_scale=args.min_scale,
             max_scale=args.max_scale,
             overwrite=args.overwrite,
-            native_simple_radial=args.native_simple_radial,
-            fixed_pose_retriangulation=args.fixed_pose_retriangulation,
-            retriangulation_max_reproj_error=args.retriangulation_max_reproj_error,
-            retriangulation_min_track_length=args.retriangulation_min_track_length,
-            retriangulation_voxel_divisor=args.retriangulation_voxel_divisor,
-            retriangulation_max_points=args.retriangulation_max_points,
-            retriangulation_min_growth_ratio=args.retriangulation_min_growth_ratio,
-            retriangulation_sift_device=args.retriangulation_sift_device,
         )
     print(json.dumps(results, ensure_ascii=False, indent=2))
     return 0

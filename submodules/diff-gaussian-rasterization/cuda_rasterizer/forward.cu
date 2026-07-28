@@ -78,16 +78,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 }
 
 // Forward version of 2D covariance matrix computation
-__device__ float3 computeCov2D(
-	const float3& mean,
-	float focal_x,
-	float focal_y,
-	float tan_fovx,
-	float tan_fovy,
-	float radial_k,
-	int camera_model,
-	const float* cov3D,
-	const float* viewmatrix)
+__device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix)
 {
 	// The following models the steps outlined by equations 29
 	// and 31 in "EWA Splatting" (Zwicker et al., 2002). 
@@ -95,40 +86,17 @@ __device__ float3 computeCov2D(
 	// Transposes used to account for row-/column-major conventions.
 	float3 t = transformPoint4x3(mean, viewmatrix);
 
-	glm::mat3 J;
-	if (camera_model == 1)
-	{
-		const float inv_z = 1.0f / t.z;
-		const float u = t.x * inv_z;
-		const float v = t.y * inv_z;
-		const float r2 = u * u + v * v;
-		const float radial_scale = 1.0f + radial_k * r2;
+	const float limx = 1.3f * tan_fovx;
+	const float limy = 1.3f * tan_fovy;
+	const float txtz = t.x / t.z;
+	const float tytz = t.y / t.z;
+	t.x = min(limx, max(-limx, txtz)) * t.z;
+	t.y = min(limy, max(-limy, tytz)) * t.z;
 
-		// GLM constructors are column-major. These values therefore store
-		// transpose(d pixel / d camera_point), as expected by W * J below.
-		J = glm::mat3(
-			focal_x * inv_z * (radial_scale + 2.0f * radial_k * u * u),
-			focal_x * inv_z * (2.0f * radial_k * u * v),
-			-focal_x * inv_z * u * (1.0f + 3.0f * radial_k * r2),
-			focal_y * inv_z * (2.0f * radial_k * u * v),
-			focal_y * inv_z * (radial_scale + 2.0f * radial_k * v * v),
-			-focal_y * inv_z * v * (1.0f + 3.0f * radial_k * r2),
-			0.0f, 0.0f, 0.0f);
-	}
-	else
-	{
-		const float limx = 1.3f * tan_fovx;
-		const float limy = 1.3f * tan_fovy;
-		const float txtz = t.x / t.z;
-		const float tytz = t.y / t.z;
-		t.x = min(limx, max(-limx, txtz)) * t.z;
-		t.y = min(limy, max(-limy, tytz)) * t.z;
-
-		J = glm::mat3(
-			focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
-			0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
-			0, 0, 0);
-	}
+	glm::mat3 J = glm::mat3(
+		focal_x / t.z, 0.0f, -(focal_x * t.x) / (t.z * t.z),
+		0.0f, focal_y / t.z, -(focal_y * t.y) / (t.z * t.z),
+		0, 0, 0);
 
 	glm::mat3 W = glm::mat3(
 		viewmatrix[0], viewmatrix[4], viewmatrix[8],
@@ -205,9 +173,6 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const int W, int H,
 	const float tan_fovx, float tan_fovy,
 	const float focal_x, float focal_y,
-	const float principal_x, float principal_y,
-	const float radial_k,
-	const int camera_model,
 	int* radii,
 	float2* points_xy_image,
 	float* depths,
@@ -253,16 +218,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	}
 
 	// Compute 2D screen-space covariance matrix
-	float3 cov = computeCov2D(
-		p_orig,
-		focal_x,
-		focal_y,
-		tan_fovx,
-		tan_fovy,
-		radial_k,
-		camera_model,
-		cov3D,
-		viewmatrix);
+	float3 cov = computeCov2D(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, cov3D, viewmatrix);
 
 	constexpr float h_var = 0.3f;
 	const float det_cov = cov.x * cov.z - cov.y * cov.y;
@@ -289,23 +245,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
 	float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
-	float2 point_image;
-	if (camera_model == 1)
-	{
-		const float inv_z = 1.0f / p_view.z;
-		const float u = p_view.x * inv_z;
-		const float v = p_view.y * inv_z;
-		const float r2 = u * u + v * v;
-		const float radial_scale = 1.0f + radial_k * r2;
-		point_image = {
-			focal_x * radial_scale * u + principal_x - 0.5f,
-			focal_y * radial_scale * v + principal_y - 0.5f
-		};
-	}
-	else
-	{
-		point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
-	}
+	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
 
 	// If colors have been precomputed, use them, otherwise convert
 	// spherical harmonics coefficients to RGB color.
@@ -935,9 +875,6 @@ void FORWARD::preprocess(int P, int D, int M,
 	const int W, int H,
 	const float focal_x, float focal_y,
 	const float tan_fovx, float tan_fovy,
-	const float principal_x, float principal_y,
-	const float radial_k,
-	const int camera_model,
 	int* radii,
 	float2* means2D,
 	float* depths,
@@ -967,9 +904,6 @@ void FORWARD::preprocess(int P, int D, int M,
 		W, H,
 		tan_fovx, tan_fovy,
 		focal_x, focal_y,
-		principal_x, principal_y,
-		radial_k,
-		camera_model,
 		radii,
 		means2D,
 		depths,

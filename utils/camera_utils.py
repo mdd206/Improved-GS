@@ -10,6 +10,7 @@ from __future__ import annotations
 from scene.cameras import Camera
 import numpy as np
 from numpy.typing import NDArray
+from utils.graphics_utils import fov2focal
 from PIL import Image
 import cv2
 from typing import Any
@@ -72,31 +73,11 @@ def loadCam(
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
-    scale_x = float(resolution[0]) / float(orig_w)
-    scale_y = float(resolution[1]) / float(orig_h)
-    return Camera(
-        resolution,
-        colmap_id=cam_info.uid,
-        R=cam_info.R,
-        T=cam_info.T,
-        FoVx=cam_info.FovX,
-        FoVy=cam_info.FovY,
-        camera_model=cam_info.camera_model,
-        fx=float(cam_info.fx) * scale_x,
-        fy=float(cam_info.fy) * scale_y,
-        cx=float(cam_info.cx) * scale_x,
-        cy=float(cam_info.cy) * scale_y,
-        radial_k=float(cam_info.radial_k),
-        depth_params=cam_info.depth_params,
-        image=image,
-        invdepthmap=invdepthmap,
-        image_name=cam_info.image_name,
-        uid=id,
-        data_device=args.data_device,
-        train_test_exp=args.train_test_exp,
-        is_test_dataset=is_test_dataset,
-        is_test_view=cam_info.is_test,
-    )
+    return Camera(resolution, colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
+                  FoVx=cam_info.FovX, FoVy=cam_info.FovY, depth_params=cam_info.depth_params,
+                  image=image, invdepthmap=invdepthmap,
+                  image_name=cam_info.image_name, uid=id, data_device=args.data_device,
+                  train_test_exp=args.train_test_exp, is_test_dataset=is_test_dataset, is_test_view=cam_info.is_test)
 
 def cameraList_from_camInfos(
     cam_infos: list[Any],
@@ -115,16 +96,10 @@ def cameraList_from_camInfos(
 
     return camera_list
 
-def camera_to_JSON(id: int, camera: Any) -> dict[str, Any]:
+def camera_to_JSON(id: int, camera: Camera) -> dict[str, Any]:
     """
-        Convert CameraInfo or Camera into the compact JSON saved with outputs.
+        Convert a Camera object into the compact JSON format saved with outputs.
     """
-    width = int(
-        camera.image_width if hasattr(camera, "image_width") else camera.width
-    )
-    height = int(
-        camera.image_height if hasattr(camera, "image_height") else camera.height
-    )
     Rt: NDArray[np.float64] = np.zeros((4, 4))
     Rt[:3, :3] = camera.R.transpose()
     Rt[:3, 3] = camera.T
@@ -137,15 +112,11 @@ def camera_to_JSON(id: int, camera: Any) -> dict[str, Any]:
     camera_entry = {
         'id' : id,
         'img_name' : camera.image_name,
-        'width' : width,
-        'height' : height,
+        'width' : camera.width,
+        'height' : camera.height,
         'position': pos.tolist(),
         'rotation': serializable_array_2d,
-        'fy' : camera.fy,
-        'fx' : camera.fx,
-        'camera_model': camera.camera_model,
-        'cx': camera.cx,
-        'cy': camera.cy,
-        'radial_k': camera.radial_k,
+        'fy' : fov2focal(camera.FovY, camera.height),
+        'fx' : fov2focal(camera.FovX, camera.width)
     }
     return camera_entry
