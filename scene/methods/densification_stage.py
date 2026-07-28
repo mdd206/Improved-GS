@@ -17,6 +17,7 @@ from gaussian_renderer import render, render_minigs_aux, render_minigs_depth
 from scene import Scene
 from scene.gaussian_model import GaussianModel as GaussianModel3DGS
 from scene.methods.densification_methods import normalize_to_unit_range
+from scene.methods.hfgs import compute_scale_reference
 from scene.training_context import TrainingContext
 
 
@@ -305,6 +306,35 @@ def _run_3dgs_improvedgs_budget_densification(
         decides how many candidates fit within the current budget.
     """
     opt = context.opt
+    runtime_state = context.runtime_state
+    scale_reference = runtime_state.get("hf_scale_reference")
+    if bool(context.method_config.get("hf_scale_aware_refinement", False)):
+        scale_interval = int(getattr(opt, "hf_scale_interval", 1000))
+        refresh_scale = scale_reference is None or iteration % scale_interval == 0
+        if refresh_scale:
+            reference_tensor = compute_scale_reference(
+                gaussians.get_scaling,
+                float(getattr(opt, "hf_scale_quantile", 0.75)),
+            )
+            scale_reference = float(reference_tensor.item())
+            runtime_state["hf_scale_reference"] = scale_reference
+        if iteration % scale_interval == 0:
+            contracted_count = gaussians.apply_hfgs_scale_contraction(
+                float(scale_reference),
+                float(getattr(opt, "hf_scale_gamma", 0.005)),
+                float(getattr(opt, "hf_scale_min_ratio", 0.70)),
+                float(getattr(opt, "hf_edge_epsilon", 1e-6)),
+            )
+            print(
+                "HF-GS scale refinement at iteration {}: s_ref={:.8f}, "
+                "contracted={}/{}".format(
+                    iteration,
+                    float(scale_reference),
+                    contracted_count,
+                    int(gaussians.get_xyz.shape[0]),
+                )
+            )
+
     if iteration % int(opt.densification_interval) != 0:
         return
     scores = _compute_improvedgs_scores(context, gaussians, render_state, iteration)
@@ -315,6 +345,7 @@ def _run_3dgs_improvedgs_budget_densification(
         opt,
         iteration,
         float(context.scene.cameras_extent),
+        scale_reference,
     )
 
 

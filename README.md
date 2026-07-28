@@ -218,6 +218,7 @@ This project uses or refers to code, methods, or implementation ideas from the f
 | Taming 3DGS | [GitHub](https://github.com/humansensinglab/taming-3dgs) |
 | Mini-Splatting | [GitHub](https://github.com/fatPeter/mini-splatting) |
 | 3DGS-MCMC | [GitHub](https://github.com/ubc-vision/3dgs-mcmc) |
+| PiDiNet | [GitHub](https://github.com/hellozhuo/pidinet) |
 | AbsGS | [GitHub](https://github.com/TY424/AbsGS) |
 | Speedy-Splat | [GitHub](https://github.com/j-alex-hanson/speedy-splat) |
 

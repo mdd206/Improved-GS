@@ -17,6 +17,10 @@ from simple_knn._C import distCUDA2
 from scene.methods.mcmc_ops import add_new_gs as _mcmc_add_new_gs
 from scene.methods.mcmc_ops import apply_mcmc_noise as _mcmc_apply_noise
 from scene.methods.mcmc_ops import relocate_gs as _mcmc_relocate_gs
+from scene.methods.hfgs import (
+    compute_scale_aware_thresholds,
+    compute_scale_contraction_ratios,
+)
 from utils.general_utils import RGB2SH, build_rotation, inverse_sigmoid
 
 
@@ -278,6 +282,7 @@ class GaussianModelDensificationMixin:
         opt: Any,
         iteration: int,
         scene_extent: float,
+        scale_reference: float | None = None,
     ) -> None:
         """
             Select candidate Gaussians with absolute screen-space gradients, then run long-axis split under the budget. In late training, fall back to gradient scores and relax the threshold while the budget is not full, matching the reference ImprovedGS behavior.
@@ -292,14 +297,35 @@ class GaussianModelDensificationMixin:
             if self.get_opacity.shape[0] < budget and iteration > late_densify_iter:
                 min_grad = min_grad / 1.5
 
-        grad_qualifiers = torch.where(torch.norm(grad_values, dim=-1) >= min_grad, True, False)
+        gradient_magnitudes = torch.norm(grad_values, dim=-1)
+        use_hf_scale = bool(getattr(opt, "hf_scale_aware_refinement", False))
+        if use_hf_scale:
+            if scale_reference is None:
+                raise ValueError("HF-GS scale-aware densification requires a scale reference.")
+            per_gaussian_thresholds = compute_scale_aware_thresholds(
+                self.get_scaling,
+                min_grad,
+                scale_reference,
+                float(getattr(opt, "hf_scale_eta", 0.2)),
+                float(getattr(opt, "hf_edge_epsilon", 1e-6)),
+            )
+            grad_qualifiers = gradient_magnitudes >= per_gaussian_thresholds
+        else:
+            grad_qualifiers = gradient_magnitudes >= min_grad
         total_candidates = int(grad_qualifiers.sum().item())
         current_points = int(self.get_xyz.shape[0])
         current_budget = min(int(budget), total_candidates + current_points)
         split_budget = current_budget - current_points
         if split_budget > 0:
             if bool(getattr(opt, "use_las", True)):
-                self.long_axis_split(scores, split_budget, grad_qualifiers, opt.split_distance, opt.opacity_reduction)
+                self.long_axis_split(
+                    scores,
+                    split_budget,
+                    grad_qualifiers,
+                    opt.split_distance,
+                    opt.opacity_reduction,
+                    include_zero_score_candidates=use_hf_scale,
+                )
             else:
                 self.densify_and_split(grad_values, min_grad, float(scene_extent))
 
@@ -309,6 +335,34 @@ class GaussianModelDensificationMixin:
                 self.prune_points(prune_mask)
         torch.cuda.empty_cache()
 
+    def apply_hfgs_scale_contraction(
+        self,
+        scale_reference: float,
+        gamma: float,
+        minimum_ratio: float,
+        epsilon: float,
+    ) -> int:
+        """
+        Contract oversized Gaussians isotropically in log-scale parameter space.
+
+        Adam moments intentionally remain untouched, matching the HF-GS update.
+        """
+        ratios = compute_scale_contraction_ratios(
+            self.get_scaling,
+            scale_reference,
+            gamma,
+            minimum_ratio,
+            epsilon,
+        )
+        contraction_mask = ratios < 1.0
+        contracted_count = int(contraction_mask.sum().item())
+        if contracted_count > 0:
+            with torch.no_grad():
+                self._scaling[contraction_mask] += torch.log(
+                    ratios[contraction_mask]
+                ).unsqueeze(1)
+        return contracted_count
+
     def long_axis_split(
         self,
         scores: torch.Tensor,
@@ -316,6 +370,7 @@ class GaussianModelDensificationMixin:
         filter_mask: torch.Tensor,
         split_distance: float,
         opacity_reduction: float,
+        include_zero_score_candidates: bool = False,
     ) -> int:
         """
             Sample candidates by importance, create two child Gaussians by moving along the longest axis in both directions, then adjust scale and opacity for the ImprovedGS split.
@@ -326,12 +381,31 @@ class GaussianModelDensificationMixin:
         padded_importance = torch.zeros((self.get_xyz.shape[0]), dtype=torch.float32, device="cuda")
         padded_importance[:scores.shape[0]] = scores.detach().float().clamp_min(0)
         padded_importance[~filter_mask] = 0
-        positive_count = int((padded_importance > 0).sum().item())
-        if positive_count == 0:
-            return 0
-
-        budget = min(int(budget), positive_count)
-        selected_indices = torch.multinomial(padded_importance, budget, replacement=False)
+        if include_zero_score_candidates:
+            eligible_indices = torch.nonzero(filter_mask, as_tuple=False).squeeze(1)
+            eligible_count = int(eligible_indices.numel())
+            if eligible_count == 0:
+                return 0
+            budget = min(int(budget), eligible_count)
+            if budget == eligible_count:
+                selected_indices = eligible_indices
+            else:
+                max_importance = float(padded_importance[filter_mask].max().item())
+                sampling_floor = max(max_importance * 1e-6, 1e-12)
+                padded_importance[filter_mask] = padded_importance[filter_mask].clamp_min(
+                    sampling_floor
+                )
+                selected_indices = torch.multinomial(
+                    padded_importance,
+                    budget,
+                    replacement=False,
+                )
+        else:
+            positive_count = int((padded_importance > 0).sum().item())
+            if positive_count == 0:
+                return 0
+            budget = min(int(budget), positive_count)
+            selected_indices = torch.multinomial(padded_importance, budget, replacement=False)
         selected_pts_mask = torch.zeros_like(padded_importance, dtype=torch.bool)
         selected_pts_mask[selected_indices] = True
 

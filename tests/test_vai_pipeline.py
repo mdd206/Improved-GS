@@ -1094,10 +1094,13 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(train_config["position_lr_max_steps"], 30000)
         self.assertFalse(train_config["coarse_to_fine"])
         self.assertFalse(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["densify_grad_threshold"], 0.0025)
+        self.assertEqual(train_config["densify_grad_threshold"], 0.00025)
+        self.assertTrue(train_config["hf_edge_weighted_loss"])
+        self.assertTrue(train_config["hf_scale_aware_refinement"])
+        self.assertEqual(train_config["hf_scale_interval"], 1000)
         self.assertEqual(train_config["budget"], 5_500_000)
         self.assertIn("vai_native_simple_radial", config["data_root"])
-        self.assertIn("d3_native_simple_radial_improvedgs_30k_5m5_dense0025", config["output_root"])
+        self.assertIn("hfgs_edge_scale_improvedgs_30k_5m5_dense00025", config["output_root"])
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
         self.assertEqual(render_config["sharpen_amount"], 1.0)
         self.assertEqual(render_config["sharpen_sigma"], 0.60)
@@ -1106,10 +1109,10 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(render_config["output_extension"], "csv")
         self.assertTrue(render_config["save_png"])
         self.assertIn("public_set", render_config["png_root"])
-        self.assertIn("d3_native_simple_radial_improvedgs_30k_5m5_dense0025", render_config["png_root"])
+        self.assertIn("hfgs_edge_scale_improvedgs_30k_5m5_dense00025", render_config["png_root"])
         notebook_source = "\n".join(code_cells)
         self.assertIn(
-            "REPO_BRANCH = 'agent/d3-native-simple-radial-improvedgs-5m5'",
+            "REPO_BRANCH = 'agent/hfgs-edge-scale-improvedgs'",
             notebook_source,
         )
         self.assertIn(
@@ -1125,7 +1128,7 @@ class ImageProcessingTests(unittest.TestCase):
             for cell in notebook["cells"]
         )
         self.assertIn(
-            "D3: native SIMPLE_RADIAL + ImprovedGS, dense 0.0025, 30k, budget 5.5M",
+            "HF-GS edge + scale trên ImprovedGS, dense 0.00025, 30k, budget 5.5M",
             all_notebook_source,
         )
         self.assertIn("SCENE_NAMES = ['HCM0204']", notebook_source)
@@ -1151,7 +1154,7 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
 
-    def test_hcm0204_template_matches_d3_experiment(self) -> None:
+    def test_hcm0204_template_matches_hfgs_experiment(self) -> None:
         config_path = Path(__file__).resolve().parents[1] / "configs" / "vai_hcm0204.json"
         with open(config_path, encoding="utf-8") as handle:
             config = json.load(handle)
@@ -1162,10 +1165,19 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertEqual(train_config["position_lr_max_steps"], 30000)
         self.assertFalse(train_config["coarse_to_fine"])
         self.assertFalse(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["densify_grad_threshold"], 0.0025)
+        self.assertEqual(train_config["densify_grad_threshold"], 0.00025)
+        self.assertTrue(train_config["hf_edge_weighted_loss"])
+        self.assertTrue(train_config["hf_scale_aware_refinement"])
+        self.assertEqual(train_config["hf_edge_alpha_p_ref"], 0.12)
+        self.assertEqual(train_config["hf_edge_alpha_g_ref"], 0.09)
+        self.assertEqual(train_config["hf_scale_quantile"], 0.75)
+        self.assertEqual(train_config["hf_scale_eta"], 0.2)
+        self.assertEqual(train_config["hf_scale_interval"], 1000)
+        self.assertEqual(train_config["hf_scale_gamma"], 0.005)
+        self.assertEqual(train_config["hf_scale_min_ratio"], 0.70)
         self.assertEqual(train_config["budget"], 5_500_000)
         self.assertIn("vai_native_simple_radial", config["data_root"])
-        self.assertIn("d3_native_simple_radial_improvedgs_30k_5m5_dense0025", config["output_root"])
+        self.assertIn("hfgs_edge_scale_improvedgs_30k_5m5_dense00025", config["output_root"])
 
 
 class EdgeMaskTests(unittest.TestCase):

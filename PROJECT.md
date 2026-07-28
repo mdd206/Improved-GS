@@ -157,6 +157,48 @@ Component switches:
 | `use_eas` | Whether to enable EAS |
 | `use_mu` | Whether to enable MU |
 
+HF-GS Sections 3.3.1 and 3.3.2 can be enabled independently on top of
+`training_method=improvedgs`:
+
+```json
+{
+  "train_args": {
+    "training_method": "improvedgs",
+    "use_las": true,
+    "hf_edge_weighted_loss": true,
+    "hf_scale_aware_refinement": true,
+    "densify_grad_threshold": 0.00025
+  }
+}
+```
+
+The edge module precomputes normalized Sobel and pretrained PiDiNet priors for
+the training views, calibrates `alpha_p` and `alpha_g` from their dataset means,
+and weights only the L1 term. PiDiNet is not executed inside the iteration
+loop. The scale module uses the 75th percentile of maximum-axis Gaussian scale
+for per-Gaussian densification thresholds, then refreshes the reference and
+contracts oversized Gaussians every 1,000 iterations. It requires LAS because
+the scale-aware candidate set is consumed by the ImprovedGS long-axis split.
+
+| Parameter | Default | Description |
+| --- | ---: | --- |
+| `hf_edge_weighted_loss` | `false` | Enable HF-GS Section 3.3.1 |
+| `hf_edge_alpha_p_ref` | `0.12` | Sobel reference coefficient |
+| `hf_edge_alpha_g_ref` | `0.09` | PiDiNet reference coefficient |
+| `hf_edge_epsilon` | `1e-6` | Calibration and scale numerical stability |
+| `hf_pidinet_checkpoint` | bundled table-5 model | PiDiNet checkpoint path |
+| `hf_pidinet_tile_size` | `1024` | Full-frame CUDA-OOM fallback tile size |
+| `hf_pidinet_tile_halo` | `192` | Context halo for fallback tiles |
+| `hf_scale_aware_refinement` | `false` | Enable HF-GS Section 3.3.2 |
+| `hf_scale_quantile` | `0.75` | Scale-reference quantile |
+| `hf_scale_eta` | `0.2` | Densification-threshold attenuation |
+| `hf_scale_interval` | `1000` | Reference refresh/contraction interval |
+| `hf_scale_gamma` | `0.005` | Exponential contraction strength |
+| `hf_scale_min_ratio` | `0.70` | Minimum scale ratio per contraction |
+
+The bundled PiDiNet implementation and checkpoint are subject to the upstream
+research-use terms in `third_party/pidinet/LICENSE`.
+
 Coarse-to-fine training is optional and can be combined with ImprovedGS without changing its densification method:
 
 ```json

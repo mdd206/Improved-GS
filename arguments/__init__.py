@@ -264,6 +264,28 @@ class ImprovedGSParams(ParamGroup):
         super().__init__(parser, "ImprovedGS Parameters")
 
 
+class HFGSParams(ParamGroup):
+    """
+        Optional HF-GS edge-supervision and scale-refinement components.
+    """
+    def __init__(self, parser: ArgumentParser) -> None:
+        self.hf_edge_weighted_loss = False  # Enable Section 3.3.1 weighted L1
+        self.hf_edge_alpha_p_ref = 0.12  # Reference Sobel coefficient
+        self.hf_edge_alpha_g_ref = 0.09  # Reference PiDiNet coefficient
+        self.hf_edge_epsilon = 1e-6  # Numerical stability for prior calibration
+        self.hf_pidinet_checkpoint = "third_party/pidinet/table5_pidinet.pth"
+        self.hf_pidinet_tile_size = 1024  # CUDA-OOM fallback tile size
+        self.hf_pidinet_tile_halo = 192  # Context around each fallback tile
+        self.hf_scale_aware_refinement = False  # Enable Section 3.3.2
+        self.hf_scale_quantile = 0.75  # Lower bound of the largest scale quartile
+        self.hf_scale_eta = 0.2  # Large-Gaussian threshold attenuation
+        self.hf_scale_interval = 1_000  # Reference refresh/contraction interval
+        self.hf_scale_gamma = 0.005  # Exponential contraction coefficient
+        self.hf_scale_min_ratio = 0.70  # Per-refresh contraction lower bound
+        self._fields = {key: value for key, value in vars(self).items() if not key.startswith("__")}
+        super().__init__(parser, "HF-GS Parameters")
+
+
 class MCMCParams(ParamGroup):
     """
         MCMC relocation and noise regularization settings.
@@ -314,6 +336,7 @@ class OptimizationParams:
             PoseAwareSamplingParams(parser),
             MiniGSParams(parser),
             ImprovedGSParams(parser),
+            HFGSParams(parser),
             MCMCParams(parser),
             GNSParams(parser),
             RegPruneParams(parser),

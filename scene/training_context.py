@@ -12,6 +12,7 @@ import torch
 from scene import Scene
 from scene.gaussian_model import GaussianModel as GaussianModel3DGS
 from scene.methods.densification_methods import prepare_edge_maps
+from scene.methods.hfgs import build_hfgs_weight_maps
 from scene.methods.training_config import build_training_method_config
 from utils.coarse_to_fine import resolve_training_resolution_scale
 
@@ -27,6 +28,9 @@ class RuntimeState(TypedDict, total=False):
     edge_maps: list[torch.Tensor]
     edge_camera_pool: list[Any]
     edge_map_pool: list[torch.Tensor]
+    hf_edge_weight_maps: dict[int, torch.Tensor]
+    hf_edge_stats: dict[str, float]
+    hf_scale_reference: Optional[float]
     opacity_min: Optional[float]
     rap_reset_count: int
     rap_trigger_iterations: set[int]
@@ -82,6 +86,9 @@ def initialize_runtime_state(
         "edge_maps": [],
         "edge_camera_pool": [],
         "edge_map_pool": [],
+        "hf_edge_weight_maps": {},
+        "hf_edge_stats": {},
+        "hf_scale_reference": None,
         "opacity_min": None,
         "rap_reset_count": 0,
         "rap_trigger_iterations": set(),
@@ -104,6 +111,10 @@ def initialize_runtime_state(
         runtime_state["edge_maps"] = edge_maps
         runtime_state["edge_camera_pool"] = train_cameras.copy()
         runtime_state["edge_map_pool"] = edge_maps.copy()
+        if bool(method_config.get("hf_edge_weighted_loss", False)):
+            weight_maps, edge_stats = build_hfgs_weight_maps(train_cameras, opt)
+            runtime_state["hf_edge_weight_maps"] = weight_maps
+            runtime_state["hf_edge_stats"] = edge_stats
     if method == "minigs":
         runtime_state["minigs_mask_blur"] = torch.zeros((gaussians.get_xyz.shape[0],), device="cuda", dtype=torch.bool)
     return runtime_state
@@ -126,6 +137,13 @@ def activate_training_resolution(context: TrainingContext, resolution_scale: flo
     runtime_state["edge_maps"] = edge_maps
     runtime_state["edge_camera_pool"] = train_cameras.copy()
     runtime_state["edge_map_pool"] = edge_maps.copy()
+    if bool(context.method_config.get("hf_edge_weighted_loss", False)):
+        weight_maps, edge_stats = build_hfgs_weight_maps(train_cameras, context.opt)
+        runtime_state["hf_edge_weight_maps"] = weight_maps
+        runtime_state["hf_edge_stats"] = edge_stats
+    else:
+        runtime_state["hf_edge_weight_maps"] = {}
+        runtime_state["hf_edge_stats"] = {}
     return train_cameras
 
 

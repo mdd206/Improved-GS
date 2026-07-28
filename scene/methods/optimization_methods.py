@@ -13,7 +13,7 @@ from fused_ssim import fused_ssim
 
 from gaussian_renderer import render
 from scene.gaussian_model import GaussianModel as GaussianModel3DGS
-from utils.loss_utils import l1_loss
+from scene.methods.hfgs import weighted_l1_loss
 from scene.methods.regularization_methods import apply_regularization_method
 from scene.training_context import TrainingContext
 from scene.training_runtime import TrainingLoopState
@@ -41,11 +41,16 @@ def _select_training_background(context: TrainingContext, loop_state: TrainingLo
     return torch.rand((3), device="cuda") if context.opt.random_background else loop_state["background"]
 
 
-def _compute_reconstruction_loss(image: torch.Tensor, gt_image: torch.Tensor, lambda_dssim: float) -> torch.Tensor:
+def _compute_reconstruction_loss(
+    image: torch.Tensor,
+    gt_image: torch.Tensor,
+    lambda_dssim: float,
+    weight_map: torch.Tensor | None = None,
+) -> torch.Tensor:
     """
         Combine pixel L1 loss and fused SSIM into the standard 3DGS image loss.
     """
-    l1_value = l1_loss(image, gt_image)
+    l1_value = weighted_l1_loss(image, gt_image, weight_map)
     ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
     return (1.0 - float(lambda_dssim)) * l1_value + float(lambda_dssim) * (1.0 - ssim_value)
 
@@ -82,7 +87,20 @@ def run_3dgs_optimization_method(
         image = image * viewpoint_cam.alpha_mask.cuda()
 
     gt_image = viewpoint_cam.original_image.cuda()
-    loss = _compute_reconstruction_loss(image, gt_image, float(context.opt.lambda_dssim))
+    weight_map = None
+    if bool(context.method_config.get("hf_edge_weighted_loss", False)):
+        cached_weight = context.runtime_state.get("hf_edge_weight_maps", {}).get(int(viewpoint_cam.uid))
+        if cached_weight is None:
+            raise KeyError(
+                "HF-GS edge weight is missing for training camera uid {}.".format(viewpoint_cam.uid)
+            )
+        weight_map = cached_weight.to(device=image.device, dtype=image.dtype, non_blocking=True)
+    loss = _compute_reconstruction_loss(
+        image,
+        gt_image,
+        float(context.opt.lambda_dssim),
+        weight_map,
+    )
 
     # Add monocular inverse-depth supervision when the view marks its depth map as reliable.
     depth_l1_weight = loop_state["depth_l1_weight"]
