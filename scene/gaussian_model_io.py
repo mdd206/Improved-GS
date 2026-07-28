@@ -13,13 +13,12 @@ from typing import Any
 
 import numpy as np
 import torch
+from plyfile import PlyData, PlyElement
 from torch import nn
 
+from simple_knn._C import distCUDA2
 from utils.general_utils import RGB2SH, mkdir_p
 from utils.graphics_utils import BasicPointCloud
-
-
-PLY_WRITE_CHUNK_SIZE = 65_536
 
 
 class GaussianModelIOMixin:
@@ -35,8 +34,6 @@ class GaussianModelIOMixin:
             from nearest-neighbor distance, rotations start as identity, and
             opacity/exposure parameters start from simple defaults.
         """
-        from simple_knn._C import distCUDA2
-
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
@@ -88,83 +85,25 @@ class GaussianModelIOMixin:
 
     def save_ply(self, path: str) -> None:
         """
-            Ghi Gaussian ra PLY binary theo chunk de gioi han peak RAM.
+            Write current raw Gaussian tensors to a PLY point-cloud file.
         """
         mkdir_p(os.path.dirname(path))
-        point_count = int(self._xyz.shape[0])
-        attribute_names = self.construct_list_of_attributes()
-        element_dtype = np.dtype([(attribute, "<f4") for attribute in attribute_names])
-        chunk_size = max(int(PLY_WRITE_CHUNK_SIZE), 1)
-        chunk_count = max((point_count + chunk_size - 1) // chunk_size, 1)
-        report_interval = max(chunk_count // 10, 1)
-        temporary_path = "{}.tmp".format(path)
-        header_lines = [
-            "ply",
-            "format binary_little_endian 1.0",
-            "element vertex {}".format(point_count),
-            *["property float {}".format(attribute) for attribute in attribute_names],
-            "end_header",
-            "",
-        ]
 
-        print(
-            "Saving PLY {} points in {} chunks...".format(point_count, chunk_count),
-            flush=True,
-        )
-        try:
-            with open(temporary_path, "wb") as output:
-                output.write("\n".join(header_lines).encode("ascii"))
-                for chunk_index, start in enumerate(range(0, point_count, chunk_size), start=1):
-                    end = min(start + chunk_size, point_count)
-                    xyz = self._xyz[start:end].detach().cpu().numpy()
-                    normals = np.zeros_like(xyz)
-                    f_dc = (
-                        self._features_dc[start:end]
-                        .detach()
-                        .transpose(1, 2)
-                        .flatten(start_dim=1)
-                        .contiguous()
-                        .cpu()
-                        .numpy()
-                    )
-                    f_rest = (
-                        self._features_rest[start:end]
-                        .detach()
-                        .transpose(1, 2)
-                        .flatten(start_dim=1)
-                        .contiguous()
-                        .cpu()
-                        .numpy()
-                    )
-                    attributes = np.concatenate(
-                        (
-                            xyz,
-                            normals,
-                            f_dc,
-                            f_rest,
-                            self._opacity[start:end].detach().cpu().numpy(),
-                            self._scaling[start:end].detach().cpu().numpy(),
-                            self._rotation[start:end].detach().cpu().numpy(),
-                        ),
-                        axis=1,
-                    )
-                    elements = np.empty(end - start, dtype=element_dtype)
-                    for attribute_index, attribute_name in enumerate(attribute_names):
-                        elements[attribute_name] = attributes[:, attribute_index]
-                    elements.tofile(output)
-                    if chunk_index % report_interval == 0 or chunk_index == chunk_count:
-                        print(
-                            "  Saving PLY: {}/{} chunks".format(chunk_index, chunk_count),
-                            flush=True,
-                        )
-            os.replace(temporary_path, path)
-        except BaseException:
-            try:
-                os.remove(temporary_path)
-            except FileNotFoundError:
-                pass
-            raise
-        print("Saving PLY complete: {}".format(path), flush=True)
+        xyz = self._xyz.detach().cpu().numpy()
+        normals = np.zeros_like(xyz)
+        f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        opacities = self._opacity.detach().cpu().numpy()
+        scale = self._scaling.detach().cpu().numpy()
+        rotation = self._rotation.detach().cpu().numpy()
+
+        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(path)
 
     def load_ply(self, path: str, use_train_test_exp: bool = False) -> None:
         """
@@ -173,11 +112,7 @@ class GaussianModelIOMixin:
             When train/test exposure is enabled, exposure matrices are loaded
             from the experiment-level `exposure.json` if it exists.
         """
-        from plyfile import PlyData
-
         plydata = PlyData.read(path)
-        vertices = plydata.elements[0]
-        point_count = len(vertices.data)
         if use_train_test_exp:
             exposure_file = os.path.join(os.path.dirname(path), os.pardir, os.pardir, "exposure.json")
             if os.path.exists(exposure_file):
@@ -189,54 +124,42 @@ class GaussianModelIOMixin:
                 print(f"No exposure to be loaded at {exposure_file}")
                 self.pretrained_exposures = None
 
-        def parameter_from_numpy(values: np.ndarray) -> nn.Parameter:
-            tensor = torch.from_numpy(values).to(device="cuda")
-            return nn.Parameter(tensor.requires_grad_(True))
+        xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
+                        np.asarray(plydata.elements[0]["y"]),
+                        np.asarray(plydata.elements[0]["z"])),  axis=1)
+        opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
 
-        # Moi lan chi tao mot mang float32 tren CPU, chuyen sang GPU roi giai phong ngay.
-        xyz = np.empty((point_count, 3), dtype=np.float32)
-        for index, attribute_name in enumerate(("x", "y", "z")):
-            xyz[:, index] = np.asarray(vertices[attribute_name])
-        self._xyz = parameter_from_numpy(xyz)
-        del xyz
+        features_dc = np.zeros((xyz.shape[0], 3, 1))
+        features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
+        features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
+        features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])
 
-        features_dc = np.empty((point_count, 1, 3), dtype=np.float32)
-        for channel in range(3):
-            features_dc[:, 0, channel] = np.asarray(vertices["f_dc_{}".format(channel)])
-        self._features_dc = parameter_from_numpy(features_dc)
-        del features_dc
-
-        extra_f_names = [p.name for p in vertices.properties if p.name.startswith("f_rest_")]
+        extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
         extra_f_names = sorted(extra_f_names, key = lambda x: int(x.split('_')[-1]))
         assert len(extra_f_names)==3*(self.max_sh_degree + 1) ** 2 - 3
-        coefficient_count = (self.max_sh_degree + 1) ** 2 - 1
-        features_extra = np.empty((point_count, coefficient_count, 3), dtype=np.float32)
+        features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
         for idx, attr_name in enumerate(extra_f_names):
-            channel = idx // coefficient_count
-            coefficient = idx % coefficient_count
-            features_extra[:, coefficient, channel] = np.asarray(vertices[attr_name])
-        self._features_rest = parameter_from_numpy(features_extra)
-        del features_extra
+            features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
+        # Reshape flat SH columns to [points, channels, coefficients except DC].
+        features_extra = features_extra.reshape((features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1))
 
-        opacities = np.empty((point_count, 1), dtype=np.float32)
-        opacities[:, 0] = np.asarray(vertices["opacity"])
-        self._opacity = parameter_from_numpy(opacities)
-        del opacities
-
-        scale_names = [p.name for p in vertices.properties if p.name.startswith("scale_")]
+        scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
         scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
-        scales = np.empty((point_count, len(scale_names)), dtype=np.float32)
+        scales = np.zeros((xyz.shape[0], len(scale_names)))
         for idx, attr_name in enumerate(scale_names):
-            scales[:, idx] = np.asarray(vertices[attr_name])
-        self._scaling = parameter_from_numpy(scales)
-        del scales
+            scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        rot_names = [p.name for p in vertices.properties if p.name.startswith("rot")]
+        rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
         rot_names = sorted(rot_names, key = lambda x: int(x.split('_')[-1]))
-        rots = np.empty((point_count, len(rot_names)), dtype=np.float32)
+        rots = np.zeros((xyz.shape[0], len(rot_names)))
         for idx, attr_name in enumerate(rot_names):
-            rots[:, idx] = np.asarray(vertices[attr_name])
-        self._rotation = parameter_from_numpy(rots)
-        del rots
+            rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
+
+        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
+        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree

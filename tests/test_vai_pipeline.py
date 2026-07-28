@@ -18,44 +18,12 @@ import torch
 from PIL import Image as PilImage
 from PIL import JpegImagePlugin
 
-_GAUSSIAN_IO_SPEC = importlib.util.spec_from_file_location(
-    "vai_gaussian_model_io",
-    Path(__file__).resolve().parents[1] / "scene" / "gaussian_model_io.py",
-)
-assert _GAUSSIAN_IO_SPEC is not None and _GAUSSIAN_IO_SPEC.loader is not None
-_GAUSSIAN_IO_MODULE = importlib.util.module_from_spec(_GAUSSIAN_IO_SPEC)
-sys.modules[_GAUSSIAN_IO_SPEC.name] = _GAUSSIAN_IO_MODULE
-_GAUSSIAN_IO_SPEC.loader.exec_module(_GAUSSIAN_IO_MODULE)
-GaussianModelIOMixin = _GAUSSIAN_IO_MODULE.GaussianModelIOMixin
-
-_CAMERA_UTILS_SPEC = importlib.util.spec_from_file_location(
-    "vai_test_camera_utils",
-    Path(__file__).resolve().parents[1] / "utils" / "camera_utils.py",
-)
-assert _CAMERA_UTILS_SPEC is not None and _CAMERA_UTILS_SPEC.loader is not None
-_CAMERA_UTILS_MODULE = importlib.util.module_from_spec(_CAMERA_UTILS_SPEC)
-sys.modules[_CAMERA_UTILS_SPEC.name] = _CAMERA_UTILS_MODULE
-_CAMERA_CLASS_STUB = SimpleNamespace(Camera=object)
-with patch.dict(
-    sys.modules,
-    {
-        "scene": SimpleNamespace(cameras=_CAMERA_CLASS_STUB),
-        "scene.cameras": _CAMERA_CLASS_STUB,
-    },
-):
-    _CAMERA_UTILS_SPEC.loader.exec_module(_CAMERA_UTILS_MODULE)
-camera_to_JSON = _CAMERA_UTILS_MODULE.camera_to_JSON
-
 from vai.colmap_io import (
     Camera,
     Image,
-    Point3D,
     read_extrinsics_binary,
-    read_intrinsics_binary,
-    read_points3d_binary,
     write_extrinsics_binary,
     write_intrinsics_binary,
-    write_points3d_binary,
 )
 from vai.common import output_name_for_pose, read_pose_rows
 from vai.distortion import redistort_and_crop, redistort_image
@@ -63,11 +31,6 @@ from vai.evaluation import compute_weighted_score
 from vai.image_processing import save_render_image, sharpen_image
 from vai.packaging import package_submission
 from vai.preprocessing import _synchronize_and_filter_images, preprocess_scene
-from vai.retriangulation import (
-    _resolve_colmap_option,
-    _run_colmap,
-    merge_sparse_points,
-)
 from utils.coarse_to_fine import (
     build_training_resolution_scales,
     resolve_training_resolution_scale,
@@ -76,14 +39,8 @@ from utils.coarse_to_fine import (
 from utils.pose_aware_sampling import (
     CameraPose,
     build_pose_sampling_plan,
-    build_pose_sampling_plan_v1,
     build_repeated_camera_pool,
     pose_from_csv_row,
-)
-from utils.simple_radial import (
-    project_simple_radial,
-    simple_radial_projection_hessians,
-    simple_radial_projection_jacobian,
 )
 
 
@@ -141,25 +98,6 @@ class VaiCommonTests(unittest.TestCase):
         self.assertAlmostEqual(normalized, 0.75)
         self.assertAlmostEqual(score, 0.785)
 
-    def test_camera_json_accepts_preload_camera_info_dimensions(self) -> None:
-        camera_info = SimpleNamespace(
-            R=np.eye(3, dtype=np.float64),
-            T=np.zeros(3, dtype=np.float64),
-            image_name="train.JPG",
-            width=640,
-            height=480,
-            fx=500.0,
-            fy=500.0,
-            cx=320.0,
-            cy=240.0,
-            camera_model="SIMPLE_RADIAL",
-            radial_k=-0.01,
-        )
-        entry = camera_to_JSON(7, camera_info)
-        self.assertEqual(entry["width"], 640)
-        self.assertEqual(entry["height"], 480)
-        self.assertEqual(entry["camera_model"], "SIMPLE_RADIAL")
-
 
 class CoarseToFineScheduleTests(unittest.TestCase):
     def test_disabled_schedule_always_uses_full_resolution(self) -> None:
@@ -215,11 +153,10 @@ class PoseAwareSamplingTests(unittest.TestCase):
         plan = build_pose_sampling_plan(
             cameras,
             test_poses,
-            position_neighbor_count=1,
-            direction_neighbor_count=1,
-            direction_radius=3.0,
+            neighbor_count=1,
             extra_fraction=0.25,
             max_repeat=2,
+            angle_weight=0.25,
         )
 
         self.assertEqual(plan.repeat_counts, {0: 1, 1: 1, 2: 1, 3: 2})
@@ -227,37 +164,10 @@ class PoseAwareSamplingTests(unittest.TestCase):
         self.assertEqual(plan.pool_size, 5)
         self.assertAlmostEqual(plan.median_train_spacing, 1.0)
         self.assertAlmostEqual(plan.max_test_gap, 2.0)
-        self.assertAlmostEqual(plan.max_test_angle_gap_degrees, 0.0)
         pool = build_repeated_camera_pool(cameras, plan.repeat_counts)
         self.assertEqual(len(pool), 5)
         self.assertTrue(all(any(item is camera for item in pool) for camera in cameras))
         self.assertEqual(sum(item is cameras[3] for item in pool), 2)
-
-    def test_v1_uses_old_combined_position_and_angle_cost(self) -> None:
-        cameras = [
-            SimpleNamespace(uid=0, camera_center=np.array([0.0, 0.0, 0.0]), R=np.eye(3)),
-            SimpleNamespace(
-                uid=1,
-                camera_center=np.array([0.1, 0.0, 0.0]),
-                R=np.diag([-1.0, 1.0, -1.0]),
-            ),
-        ]
-        test_poses = [
-            CameraPose(
-                center=np.array([0.08, 0.0, 0.0]),
-                forward=np.array([0.0, 0.0, 1.0]),
-            )
-        ]
-        plan = build_pose_sampling_plan_v1(
-            cameras,
-            test_poses,
-            neighbor_count=1,
-            extra_fraction=0.5,
-            max_repeat=2,
-            angle_weight=0.25,
-        )
-
-        self.assertEqual(plan.repeat_counts, {0: 2, 1: 1})
 
     def test_view_direction_can_override_a_small_position_advantage(self) -> None:
         cameras = [
@@ -272,42 +182,13 @@ class PoseAwareSamplingTests(unittest.TestCase):
         plan = build_pose_sampling_plan(
             cameras,
             test_poses,
-            position_neighbor_count=1,
-            direction_neighbor_count=1,
-            direction_radius=3.0,
+            neighbor_count=1,
             extra_fraction=0.5,
             max_repeat=2,
+            angle_weight=0.25,
         )
 
         self.assertEqual(plan.repeat_counts, {0: 2, 1: 1})
-
-    def test_direction_neighbor_stays_inside_position_radius(self) -> None:
-        cameras = [
-            SimpleNamespace(uid=0, camera_center=np.array([0.0, 0.0, 0.0]), R=np.eye(3)),
-            SimpleNamespace(
-                uid=1,
-                camera_center=np.array([1.0, 0.0, 0.0]),
-                R=np.diag([-1.0, 1.0, -1.0]),
-            ),
-            SimpleNamespace(
-                uid=2,
-                camera_center=np.array([2.0, 0.0, 0.0]),
-                R=np.diag([-1.0, 1.0, -1.0]),
-            ),
-            SimpleNamespace(uid=3, camera_center=np.array([10.0, 0.0, 0.0]), R=np.eye(3)),
-        ]
-        test_poses = [CameraPose(center=np.array([1.1, 0.0, 0.0]), forward=np.array([0.0, 0.0, 1.0]))]
-        plan = build_pose_sampling_plan(
-            cameras,
-            test_poses,
-            position_neighbor_count=1,
-            direction_neighbor_count=1,
-            direction_radius=3.0,
-            extra_fraction=0.5,
-            max_repeat=2,
-        )
-
-        self.assertEqual(plan.repeat_counts, {0: 2, 1: 2, 2: 1, 3: 1})
 
 
 class ColmapIoTests(unittest.TestCase):
@@ -346,242 +227,8 @@ class ColmapIoTests(unittest.TestCase):
             self.assertEqual(count, 1)
             self.assertEqual(list(loaded.values())[0].name, "a.png")
 
-    def test_points3d_binary_round_trip(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            path = Path(temp_dir) / "points3D.bin"
-            source = {
-                7: Point3D(
-                    id=7,
-                    xyz=np.array([1.0, 2.0, 3.0]),
-                    rgb=np.array([10, 20, 30], dtype=np.uint8),
-                    error=0.75,
-                    image_ids=np.array([2, 9], dtype=np.int32),
-                    point2D_idxs=np.array([3, 4], dtype=np.int32),
-                )
-            }
-            write_points3d_binary(source, path)
-            loaded = read_points3d_binary(path)
-            self.assertEqual(set(loaded), {7})
-            np.testing.assert_allclose(loaded[7].xyz, source[7].xyz)
-            np.testing.assert_array_equal(loaded[7].rgb, source[7].rgb)
-            np.testing.assert_array_equal(loaded[7].image_ids, source[7].image_ids)
-            self.assertAlmostEqual(loaded[7].error, 0.75)
-
-
-class RetriangulationTests(unittest.TestCase):
-    def test_colmap_uses_qt_offscreen_without_display(self) -> None:
-        with patch.dict("vai.retriangulation.os.environ", {}, clear=True), patch(
-            "vai.retriangulation.subprocess.run"
-        ) as run_mock:
-            _run_colmap(["colmap", "feature_extractor"], "feature_extractor")
-
-        self.assertEqual(
-            run_mock.call_args.kwargs["env"]["QT_QPA_PLATFORM"],
-            "offscreen",
-        )
-
-    def test_colmap_device_option_supports_legacy_and_new_names(self) -> None:
-        with patch(
-            "vai.retriangulation.subprocess.run",
-            return_value=SimpleNamespace(
-                stdout="--SiftExtraction.use_gpu arg (=1)",
-                stderr="",
-            ),
-        ):
-            option = _resolve_colmap_option(
-                "colmap",
-                "feature_extractor",
-                ("--FeatureExtraction.use_gpu", "--SiftExtraction.use_gpu"),
-            )
-
-        self.assertEqual(option, "--SiftExtraction.use_gpu")
-
-    def test_colmap_gpu_uses_xvfb_without_display(self) -> None:
-        with patch.dict("vai.retriangulation.os.environ", {}, clear=True), patch(
-            "vai.retriangulation.shutil.which",
-            return_value="/usr/bin/xvfb-run",
-        ), patch("vai.retriangulation.subprocess.run") as run_mock:
-            _run_colmap(
-                ["colmap", "feature_extractor"],
-                "feature_extractor",
-                use_gpu=True,
-            )
-
-        self.assertEqual(
-            run_mock.call_args.args[0],
-            ["/usr/bin/xvfb-run", "-a", "colmap", "feature_extractor"],
-        )
-        self.assertNotIn(
-            "QT_QPA_PLATFORM",
-            run_mock.call_args.kwargs["env"],
-        )
-
-    def test_colmap_gpu_requires_xvfb_without_display(self) -> None:
-        with patch.dict("vai.retriangulation.os.environ", {}, clear=True), patch(
-            "vai.retriangulation.shutil.which",
-            return_value=None,
-        ):
-            with self.assertRaises(FileNotFoundError):
-                _run_colmap(
-                    ["colmap", "feature_extractor"],
-                    "feature_extractor",
-                    use_gpu=True,
-                )
-
-    def test_merge_prefers_strong_original_then_new_then_weak_original(self) -> None:
-        original = {
-            1: Point3D(
-                id=1,
-                xyz=np.array([0.0, 0.0, 0.0]),
-                rgb=np.array([255, 0, 0], dtype=np.uint8),
-                error=0.5,
-                image_ids=np.array([1, 2], dtype=np.int32),
-                point2D_idxs=np.array([0, 0], dtype=np.int32),
-            ),
-            2: Point3D(
-                id=2,
-                xyz=np.array([10.0, 0.0, 0.0]),
-                rgb=np.array([0, 255, 0], dtype=np.uint8),
-                error=1.5,
-                image_ids=np.array([99], dtype=np.int32),
-                point2D_idxs=np.array([0], dtype=np.int32),
-            ),
-        }
-        triangulated = {
-            10: Point3D(
-                id=10,
-                xyz=np.array([10.001, 0.0, 0.0]),
-                rgb=np.array([0, 0, 255], dtype=np.uint8),
-                error=0.4,
-                image_ids=np.array([1, 2], dtype=np.int32),
-                point2D_idxs=np.array([0, 0], dtype=np.int32),
-            ),
-            11: Point3D(
-                id=11,
-                xyz=np.array([5.0, 0.0, 0.0]),
-                rgb=np.array([255, 255, 0], dtype=np.uint8),
-                error=0.6,
-                image_ids=np.array([1, 2, 3], dtype=np.int32),
-                point2D_idxs=np.array([0, 0, 0], dtype=np.int32),
-            ),
-            12: Point3D(
-                id=12,
-                xyz=np.array([6.0, 0.0, 0.0]),
-                rgb=np.array([255, 0, 255], dtype=np.uint8),
-                error=3.0,
-                image_ids=np.array([1, 2], dtype=np.int32),
-                point2D_idxs=np.array([0, 0], dtype=np.int32),
-            ),
-        }
-        xyz, rgb, stats = merge_sparse_points(
-            original,
-            triangulated,
-            {1, 2, 3},
-            max_reprojection_error=2.5,
-            min_track_length=2,
-            voxel_divisor=100.0,
-            max_points=10,
-        )
-
-        self.assertEqual(len(xyz), 3)
-        self.assertEqual(stats["accepted_triangulated_points"], 2)
-        self.assertEqual(stats["replaced_weak_original_voxels"], 1)
-        self.assertEqual(stats["added_voxel_points"], 1)
-        self.assertAlmostEqual(stats["growth_ratio"], 0.5)
-        colors = {tuple(color.tolist()) for color in rgb}
-        self.assertIn((255, 0, 0), colors)
-        self.assertIn((0, 0, 255), colors)
-        self.assertIn((255, 255, 0), colors)
-        self.assertNotIn((0, 255, 0), colors)
-
 
 class PreprocessingTests(unittest.TestCase):
-    def test_native_simple_radial_keeps_raw_rgb_and_skips_colmap(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            source_scene = root / "raw" / "HCM0204"
-            source_images = source_scene / "train" / "images"
-            source_sparse = source_scene / "train" / "sparse" / "0"
-            test_dir = source_scene / "test"
-            source_images.mkdir(parents=True)
-            source_sparse.mkdir(parents=True)
-            test_dir.mkdir(parents=True)
-            PilImage.new("RGB", (4, 3), (10, 20, 30)).save(source_images / "train.JPG")
-            write_intrinsics_binary(
-                {
-                    1: Camera(
-                        id=1,
-                        model="SIMPLE_RADIAL",
-                        width=4,
-                        height=3,
-                        params=np.array([10.0, 2.0, 1.5, 0.01]),
-                    )
-                },
-                source_sparse / "cameras.bin",
-            )
-            write_extrinsics_binary(
-                {
-                    1: make_colmap_image(1, "train.JPG"),
-                    2: make_colmap_image(2, "missing.JPG"),
-                },
-                source_sparse / "images.bin",
-            )
-            (source_sparse / "points3D.bin").write_bytes(b"\x00" * 8)
-            with open(test_dir / "test_poses.csv", "w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=POSE_COLUMNS)
-                writer.writeheader()
-                writer.writerow(
-                    {
-                        "image_name": "test.JPG",
-                        "qw": "1",
-                        "qx": "0",
-                        "qy": "0",
-                        "qz": "0",
-                        "tx": "0",
-                        "ty": "0",
-                        "tz": "0",
-                        "fx": "10",
-                        "fy": "10",
-                        "cx": "2",
-                        "cy": "1.5",
-                        "width": "4",
-                        "height": "3",
-                    }
-                )
-
-            output_root = root / "native"
-            with patch(
-                "vai.preprocessing._check_colmap_executable",
-                side_effect=AssertionError("native D3 must not check COLMAP"),
-            ):
-                result = preprocess_scene(
-                    source_scene,
-                    output_root,
-                    native_simple_radial=True,
-                )
-
-            output_scene = output_root / "HCM0204"
-            self.assertTrue(result["native_simple_radial"])
-            self.assertEqual(result["train_images"], 1)
-            self.assertTrue((output_scene / "images" / "train.JPG").is_file())
-            self.assertFalse((output_scene / "images" / "train.png").exists())
-            with PilImage.open(output_scene / "images" / "train.JPG") as image:
-                self.assertEqual(image.mode, "RGB")
-            camera = next(
-                iter(read_intrinsics_binary(output_scene / "sparse" / "0" / "cameras.bin").values())
-            )
-            self.assertEqual(camera.model, "SIMPLE_RADIAL")
-            self.assertEqual(
-                [image.name for image in read_extrinsics_binary(output_scene / "sparse" / "0" / "images.bin").values()],
-                ["train.JPG"],
-            )
-            with open(output_scene / "vai_metadata.json", encoding="utf-8") as handle:
-                metadata = json.load(handle)
-            self.assertTrue(metadata["native_simple_radial"])
-            self.assertFalse(metadata["undistort"]["enabled"])
-            self.assertEqual(metadata["training_camera"]["model"], "SIMPLE_RADIAL")
-            self.assertNotIn("undistorted_camera", metadata)
-
     def test_scene_is_normalized_for_improvedgs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -660,213 +307,24 @@ class PreprocessingTests(unittest.TestCase):
                     output_path / "sparse" / "cameras.bin",
                 )
 
-            fixed_pose_calls: list[dict[str, object]] = []
-
-            def fake_fixed_pose_cloud(**kwargs: object) -> dict[str, object]:
-                fixed_pose_calls.append(kwargs)
-                output_ply = Path(kwargs["output_ply"])
-                output_ply.write_bytes(b"ply\n")
-                return {
-                    "enabled": True,
-                    "poses_fixed": True,
-                    "original_points": 1,
-                    "triangulated_points": 2,
-                    "accepted_triangulated_points": 2,
-                    "merged_points": 2,
-                    "growth_ratio": 1.0,
-                }
-
             output_root = root / "cleaned"
             with patch("vai.preprocessing._check_colmap_executable"), patch(
                 "vai.preprocessing._run_colmap_undistorter",
                 side_effect=fake_undistorter,
-            ), patch(
-                "vai.preprocessing.build_fixed_pose_point_cloud",
-                side_effect=fake_fixed_pose_cloud,
             ):
-                result = preprocess_scene(
-                    source_scene,
-                    output_root,
-                    fixed_pose_retriangulation=True,
-                )
+                result = preprocess_scene(source_scene, output_root)
 
             output_scene = output_root / "HCM0204"
             self.assertEqual(result["scene_name"], "HCM0204")
             self.assertEqual(result["train_images"], 1)
-            self.assertEqual(result["initial_points"], 2)
-            self.assertEqual(fixed_pose_calls[0]["sift_device"], "gpu")
             self.assertTrue((output_scene / "images" / "train.png").is_file())
             self.assertTrue((output_scene / "sparse" / "0" / "cameras.bin").is_file())
-            self.assertTrue((output_scene / "sparse" / "0" / "points3D.ply").is_file())
             with PilImage.open(output_scene / "images" / "train.png") as image:
                 self.assertEqual(image.mode, "RGBA")
             with open(output_scene / "vai_metadata.json", encoding="utf-8") as handle:
                 metadata = json.load(handle)
             self.assertEqual(metadata["original_camera"]["model"], "SIMPLE_RADIAL")
             self.assertEqual(metadata["undistorted_camera"]["model"], "PINHOLE")
-            self.assertTrue(metadata["fixed_pose_retriangulation"]["poses_fixed"])
-
-
-class GaussianModelIOTests(unittest.TestCase):
-    @staticmethod
-    def _read_binary_ply(path: Path) -> tuple[list[str], np.ndarray]:
-        property_names: list[str] = []
-        point_count = None
-        with path.open("rb") as source:
-            while True:
-                raw_line = source.readline()
-                if not raw_line:
-                    raise AssertionError("PLY header khong co end_header")
-                line = raw_line.decode("ascii").strip()
-                if line.startswith("element vertex "):
-                    point_count = int(line.rsplit(" ", 1)[1])
-                elif line.startswith("property float "):
-                    property_names.append(line.rsplit(" ", 1)[1])
-                elif line == "end_header":
-                    break
-            if point_count is None:
-                raise AssertionError("PLY header khong co vertex count")
-            dtype = np.dtype([(name, "<f4") for name in property_names])
-            vertices = np.fromfile(source, dtype=dtype, count=point_count)
-        return property_names, vertices
-
-    @staticmethod
-    def _make_small_gaussian_model(point_count: int = 5) -> GaussianModelIOMixin:
-        model = GaussianModelIOMixin.__new__(GaussianModelIOMixin)
-        model._xyz = torch.arange(point_count * 3, dtype=torch.float32).reshape(point_count, 3)
-        model._features_dc = (
-            torch.arange(point_count * 3, dtype=torch.float32).reshape(point_count, 1, 3)
-            + 100.0
-        )
-        model._features_rest = (
-            torch.arange(point_count * 6, dtype=torch.float32).reshape(point_count, 2, 3)
-            + 200.0
-        )
-        model._opacity = torch.arange(point_count, dtype=torch.float32).reshape(point_count, 1)
-        model._scaling = (
-            torch.arange(point_count * 3, dtype=torch.float32).reshape(point_count, 3)
-            + 300.0
-        )
-        model._rotation = (
-            torch.arange(point_count * 4, dtype=torch.float32).reshape(point_count, 4)
-            + 400.0
-        )
-        return model
-
-    def test_save_ply_writes_binary_chunks_with_bounded_rows(self) -> None:
-        model = self._make_small_gaussian_model()
-        concatenate_rows: list[int] = []
-        original_concatenate = np.concatenate
-
-        def record_concatenate(arrays: tuple[np.ndarray, ...], axis: int) -> np.ndarray:
-            result = original_concatenate(arrays, axis=axis)
-            concatenate_rows.append(int(result.shape[0]))
-            return result
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = Path(temp_dir) / "point_cloud.ply"
-            with patch("vai_gaussian_model_io.PLY_WRITE_CHUNK_SIZE", 2), patch(
-                "vai_gaussian_model_io.np.concatenate",
-                side_effect=record_concatenate,
-            ), patch("builtins.print"):
-                model.save_ply(str(output_path))
-
-            self.assertEqual(concatenate_rows, [2, 2, 1])
-            self.assertTrue(output_path.is_file())
-            self.assertFalse(Path(f"{output_path}.tmp").exists())
-            property_names, vertices = self._read_binary_ply(output_path)
-            self.assertEqual(len(vertices), 5)
-            self.assertIn("f_rest_5", property_names)
-            xyz = np.column_stack(
-                (
-                    np.asarray(vertices["x"]),
-                    np.asarray(vertices["y"]),
-                    np.asarray(vertices["z"]),
-                )
-            )
-            np.testing.assert_array_equal(xyz, model._xyz.numpy())
-            np.testing.assert_array_equal(
-                np.asarray(vertices["f_rest_5"]),
-                model._features_rest[:, 1, 2].numpy(),
-            )
-
-    def test_save_ply_removes_partial_file_after_error(self) -> None:
-        model = self._make_small_gaussian_model()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            output_path = Path(temp_dir) / "point_cloud.ply"
-            with patch(
-                "vai_gaussian_model_io.np.concatenate",
-                side_effect=MemoryError("test"),
-            ), patch("builtins.print"):
-                with self.assertRaises(MemoryError):
-                    model.save_ply(str(output_path))
-
-            self.assertFalse(output_path.exists())
-            self.assertFalse(Path(f"{output_path}.tmp").exists())
-
-    def test_load_ply_uses_float32_and_restores_feature_layout(self) -> None:
-        point_count = 2
-        coefficient_count = 3
-        columns = {
-            "x": np.array([1.0, 2.0], dtype=np.float32),
-            "y": np.array([3.0, 4.0], dtype=np.float32),
-            "z": np.array([5.0, 6.0], dtype=np.float32),
-            "opacity": np.array([0.1, 0.2], dtype=np.float32),
-            **{
-                f"f_dc_{index}": np.array([index, index + 0.5], dtype=np.float32)
-                for index in range(3)
-            },
-            **{
-                f"f_rest_{index}": np.array([index, index + 0.5], dtype=np.float32)
-                for index in range(3 * coefficient_count)
-            },
-            **{
-                f"scale_{index}": np.array([index + 10.0, index + 10.5], dtype=np.float32)
-                for index in range(3)
-            },
-            **{
-                f"rot_{index}": np.array([index + 20.0, index + 20.5], dtype=np.float32)
-                for index in range(4)
-            },
-        }
-
-        class FakeVertices:
-            data = np.empty(point_count, dtype=np.float32)
-            properties = [SimpleNamespace(name=name) for name in columns]
-
-            def __getitem__(self, name: str) -> np.ndarray:
-                return columns[name]
-
-        class FakePlyData:
-            @staticmethod
-            def read(_path: str) -> SimpleNamespace:
-                return SimpleNamespace(elements=[FakeVertices()])
-
-        model = GaussianModelIOMixin.__new__(GaussianModelIOMixin)
-        model.max_sh_degree = 1
-        empty_dtypes: list[object] = []
-        original_empty = np.empty
-
-        def record_empty(shape: object, dtype: object = float, *args: object, **kwargs: object) -> np.ndarray:
-            empty_dtypes.append(dtype)
-            return original_empty(shape, dtype=dtype, *args, **kwargs)
-
-        with patch.dict(sys.modules, {"plyfile": SimpleNamespace(PlyData=FakePlyData)}), patch.object(
-            torch.Tensor,
-            "to",
-            lambda tensor, *args, **kwargs: tensor,
-        ), patch("vai_gaussian_model_io.np.empty", side_effect=record_empty):
-            model.load_ply("fake.ply")
-
-        self.assertEqual(empty_dtypes, [np.float32] * 6)
-        self.assertEqual(tuple(model._features_dc.shape), (point_count, 1, 3))
-        self.assertEqual(
-            tuple(model._features_rest.shape),
-            (point_count, coefficient_count, 3),
-        )
-        self.assertEqual(model._features_rest.dtype, torch.float32)
-        self.assertEqual(float(model._features_rest[1, 2, 1]), 5.5)
-        self.assertEqual(model.active_sh_degree, model.max_sh_degree)
 
 
 class DistortionTests(unittest.TestCase):
@@ -910,70 +368,6 @@ class DistortionTests(unittest.TestCase):
             interpolation="bilinear",
         )
         self.assertGreater(float((bicubic - bilinear).abs().sum().item()), 0.0)
-
-
-class SimpleRadialProjectionTests(unittest.TestCase):
-    def test_projection_uses_colmap_pixel_centers(self) -> None:
-        point = torch.tensor([0.0, 0.0, 2.0], dtype=torch.float64)
-        projected = project_simple_radial(
-            point,
-            focal_x=10.0,
-            focal_y=12.0,
-            cx=2.0,
-            cy=1.5,
-            radial_k=0.1,
-        )
-        torch.testing.assert_close(
-            projected,
-            torch.tensor([1.5, 1.0], dtype=torch.float64),
-        )
-
-    def test_analytic_jacobian_matches_autograd(self) -> None:
-        point = torch.tensor([0.3, -0.2, 2.0], dtype=torch.float64, requires_grad=True)
-        expected = torch.autograd.functional.jacobian(
-            lambda value: project_simple_radial(
-                value,
-                focal_x=850.0,
-                focal_y=830.0,
-                cx=512.0,
-                cy=384.0,
-                radial_k=-0.07,
-            ),
-            point,
-        )
-        actual = simple_radial_projection_jacobian(
-            point,
-            focal_x=850.0,
-            focal_y=830.0,
-            radial_k=-0.07,
-        )
-        torch.testing.assert_close(actual, expected, atol=1e-10, rtol=1e-10)
-
-    def test_analytic_hessians_match_autograd(self) -> None:
-        point = torch.tensor([0.3, -0.2, 2.0], dtype=torch.float64, requires_grad=True)
-        expected = torch.stack(
-            [
-                torch.autograd.functional.hessian(
-                    lambda value, axis=axis: project_simple_radial(
-                        value,
-                        focal_x=850.0,
-                        focal_y=830.0,
-                        cx=512.0,
-                        cy=384.0,
-                        radial_k=-0.07,
-                    )[axis],
-                    point,
-                )
-                for axis in range(2)
-            ]
-        )
-        actual = simple_radial_projection_hessians(
-            point,
-            focal_x=850.0,
-            focal_y=830.0,
-            radial_k=-0.07,
-        )
-        torch.testing.assert_close(actual, expected, atol=1e-10, rtol=1e-10)
 
 
 class ImageProcessingTests(unittest.TestCase):
@@ -1096,9 +490,10 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertFalse(train_config["pose_aware_sampling"])
         self.assertEqual(train_config["densify_grad_threshold"], 0.00025)
         self.assertEqual(train_config["budget"], 5_500_000)
-        self.assertIn("vai_mvsplat_init_native_simple_radial", config["data_root"])
+        self.assertIn("vai_mvsplat_init_cleaned", config["data_root"])
+        self.assertNotIn("native_simple_radial", config["data_root"])
         self.assertIn(
-            "mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025",
+            "mvsplat_init_improvedgs_30k_5m5_dense00025",
             config["output_root"],
         )
         self.assertEqual(render_config["redistort_interpolation"], "bicubic")
@@ -1110,7 +505,7 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertTrue(render_config["save_png"])
         self.assertIn("public_set", render_config["png_root"])
         self.assertIn(
-            "mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025",
+            "mvsplat_init_improvedgs_30k_5m5_dense00025",
             render_config["png_root"],
         )
         notebook_source = "\n".join(code_cells)
@@ -1118,34 +513,31 @@ class ImageProcessingTests(unittest.TestCase):
             "REPO_BRANCH = 'agent/mvsplat-init-improvedgs'",
             notebook_source,
         )
-        self.assertIn(
-            "'checkout', REPO_BRANCH",
-            notebook_source,
-        )
-        self.assertIn(
-            "'pull', '--ff-only', 'origin', REPO_BRANCH",
-            notebook_source,
-        )
+        self.assertIn("'checkout', REPO_BRANCH", notebook_source)
+        self.assertIn("'pull', '--ff-only', 'origin', REPO_BRANCH", notebook_source)
         all_notebook_source = "\n".join(
             "".join(cell.get("source", []))
             for cell in notebook["cells"]
         )
         self.assertIn(
-            "MVSplat-init + native SIMPLE_RADIAL + ImprovedGS thuan, "
+            "MVSplat-init + ImprovedGS thuần trên main, "
             "dense 0.00025, 30k, budget 5.5M",
             all_notebook_source,
         )
         self.assertIn("SCENE_NAMES = ['HCM0204']", notebook_source)
         self.assertIn("'--subset', *SELECTED_SCENES", notebook_source)
+        self.assertIn("sys.executable, '-u', 'vai_preprocess.py'", notebook_source)
+        self.assertIn("sys.executable, '-u', 'vai_mvsplat_init.py'", notebook_source)
         self.assertIn("'--overwrite'", notebook_source)
-        self.assertIn("'--native_simple_radial'", notebook_source)
+        self.assertNotIn("'--native_simple_radial'", notebook_source)
         self.assertNotIn("'--fixed_pose_retriangulation'", notebook_source)
         self.assertNotIn("'--retriangulation_min_growth_ratio'", notebook_source)
         self.assertNotIn("'--retriangulation_sift_device'", notebook_source)
-        self.assertIn("sys.executable, '-u', 'vai_preprocess.py'", notebook_source)
-        self.assertIn("sys.executable, '-u', 'vai_mvsplat_init.py'", notebook_source)
         self.assertIn("'--mvsplat_repo', str(MVSPLAT_DIR)", notebook_source)
-        self.assertIn("'--checkpoint_sha256', MVSPLAT_CHECKPOINT_SHA256", notebook_source)
+        self.assertIn(
+            "'--checkpoint_sha256', MVSPLAT_CHECKPOINT_SHA256",
+            notebook_source,
+        )
         self.assertIn("'--max_pairs', str(MVSPLAT_MAX_PAIRS)", notebook_source)
         self.assertIn("'--mixed_precision', MVSPLAT_MIXED_PRECISION", notebook_source)
         self.assertIn(
@@ -1157,36 +549,11 @@ class ImageProcessingTests(unittest.TestCase):
         self.assertIn("f'{SET_NAME}_{EXPERIMENT_NAME}_jpeg.zip'", notebook_source)
         self.assertIn("f'{SET_NAME}_{EXPERIMENT_NAME}_png.zip'", notebook_source)
         self.assertGreaterEqual(notebook_source.count("'vai_package.py'"), 2)
-        self.assertNotIn("'--no-install-recommends', 'colmap'", notebook_source)
-        self.assertNotIn("apt-get", notebook_source)
-        self.assertNotIn("'xvfb'", notebook_source)
-        self.assertNotIn("'xauth'", notebook_source)
-        self.assertIn("'MAX_JOBS'] = '2'", notebook_source)
-        self.assertNotIn("'numpy==1.26.1'", notebook_source)
-        self.assertNotIn("'opencv-python==4.10.0.82'", notebook_source)
-        self.assertNotIn("install_colmap_with_conda", notebook_source)
+        self.assertIn("'--no-install-recommends', 'colmap'", notebook_source)
+        self.assertIn("install_colmap_with_conda", notebook_source)
         self.assertNotIn("'install', '-y', '-qq', 'colmap'", notebook_source)
         self.assertNotIn("configs/vai_hcm0204.json", notebook_source)
         self.assertGreaterEqual(notebook_source.count("str(RUNTIME_CONFIG_PATH)"), 2)
-
-    def test_hcm0204_template_matches_mvsplat_init_experiment(self) -> None:
-        config_path = Path(__file__).resolve().parents[1] / "configs" / "vai_hcm0204.json"
-        with open(config_path, encoding="utf-8") as handle:
-            config = json.load(handle)
-
-        train_config = config["train_args"]
-        self.assertEqual(train_config["iterations"], 30000)
-        self.assertEqual(train_config["save_iterations"], [30000])
-        self.assertEqual(train_config["position_lr_max_steps"], 30000)
-        self.assertFalse(train_config["coarse_to_fine"])
-        self.assertFalse(train_config["pose_aware_sampling"])
-        self.assertEqual(train_config["densify_grad_threshold"], 0.00025)
-        self.assertEqual(train_config["budget"], 5_500_000)
-        self.assertIn("vai_mvsplat_init_native_simple_radial", config["data_root"])
-        self.assertIn(
-            "mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025",
-            config["output_root"],
-        )
 
 
 class EdgeMaskTests(unittest.TestCase):

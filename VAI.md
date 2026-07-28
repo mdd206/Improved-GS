@@ -6,11 +6,11 @@ Tai lieu nay mo ta luong xu ly du lieu Viettel AI Race (VAI) da duoc tich hop va
 
 ```text
 VAI raw scene
-  -> copy anh RGB + camera SIMPLE_RADIAL native
-  -> MVSplat pinhole context tam thoi (khong ghi de anh train)
-  -> sparse COLMAP + point MVSplat da loc -> points3D.ply
-  -> ImprovedGS thuan train
-  -> render test_poses.csv voi SIMPLE_RADIAL native
+  -> COLMAP image_undistorter
+  -> anh PINHOLE RGBA + alpha mask
+  -> ImprovedGS train
+  -> render test_poses.csv tren canvas undistort
+  -> SIMPLE_RADIAL redistort + crop
   -> sharpen mot lan
   -> JPEG dung ten CSV + PNG lossless
   -> SSIM / PSNR / LPIPS / weighted score tren JPEG
@@ -21,43 +21,34 @@ VAI raw scene
 
 ## 2. Preprocess HCM0204
 
-Thi nghiem MVSplat-init khong can COLMAP CLI va khong bat fixed-pose
-retriangulation P1. Anh RGB va camera `SIMPLE_RADIAL` duoc giu nguyen. Output
-rieng nam tai
-`/kaggle/working/vai_mvsplat_init_native_simple_radial/public_set/HCM0204`:
+COLMAP CLI phai co trong `PATH`. Lenh sau chi xu ly HCM0204 va tao scene chuan tai `/kaggle/working/vai_cleaned/HCM0204`:
 
 ```bash
 python vai_preprocess.py \
   --input /kaggle/input/datasets/xuanph/phase1/phase1/public_set \
-  --output /kaggle/working/vai_mvsplat_init_native_simple_radial/public_set \
-  --subset HCM0204 \
-  --overwrite \
-  --native_simple_radial
+  --output /kaggle/working/vai_cleaned \
+  --subset HCM0204
 ```
 
 Output co layout:
 
 ```text
-vai_mvsplat_init_native_simple_radial/public_set/HCM0204/
-  images/                 # Anh RGB raw
-  sparse/0/               # SIMPLE_RADIAL + sparse goc + MVSplat points3D.ply
+vai_cleaned/HCM0204/
+  images/                 # PNG RGBA da undistort
+  sparse/0/               # COLMAP PINHOLE da loc theo anh train
   test/images/            # Public ground truth neu co
   test/test_poses.csv
-  vai_metadata.json       # Camera va thong ke preprocess
+  vai_metadata.json       # Camera SIMPLE_RADIAL goc va camera PINHOLE moi
 ```
 
 Preprocess tao scene trong thu muc tam, validate xong moi thay output dich. Neu scene dich da ton tai, lenh se dung; chi dung `--overwrite` khi muon tao lai scene do.
-
-Root rieng la bat buoc de thi nghiem khong tai su dung scene P1 hoac D3 cu.
-Cell preprocess co `--overwrite`, `--native_simple_radial` va khong truyen bat
-ky flag `--fixed_pose_retriangulation` nao.
 
 Kiem tra lai output ma khong preprocess:
 
 ```bash
 python vai_preprocess.py \
   --input /kaggle/input/datasets/xuanph/phase1/phase1/public_set \
-  --output /kaggle/working/vai_mvsplat_init_native_simple_radial/public_set \
+  --output /kaggle/working/vai_cleaned \
   --subset HCM0204 \
   --validate_only
 ```
@@ -66,9 +57,7 @@ python vai_preprocess.py \
 
 Khi chay notebook Kaggle, sua truc tiep dictionary `VAI_CONFIG` trong cell co tag
 `parameters`. Notebook ghi dictionary nay thanh
-`/kaggle/working/vai_<set_name>_mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025.runtime.json`;
-dry-run va
-train deu dung file runtime do,
+`/kaggle/working/vai_<set_name>.runtime.json`; dry-run va train deu dung file runtime do,
 khong doc config HCM0204 trong source repo. File
 [configs/vai_hcm0204.json](configs/vai_hcm0204.json) chi la template cho cach chay CLI
 ngoai notebook.
@@ -76,26 +65,18 @@ ngoai notebook.
 Config mac dinh trong notebook da dat:
 
 - `training_method=improvedgs`.
-- `iterations=30000`; luu point cloud tai 30.000.
-- PLY duoc ghi binary theo chunk 65.536 Gaussian va chi replace file dich sau
-  khi ghi xong, tranh peak RAM khi model gan budget 5,5 trieu. Thi nghiem khong
-  luu optimizer checkpoint mac dinh vi state nay rat lon.
-- `position_lr_max_steps=30000`.
-- `coarse_to_fine=false`.
-- `pose_aware_sampling=false`.
-- `densify_grad_threshold=0.00025` va `budget=5500000`.
+- `coarse_to_fine=true`: train 1/4 resolution den iteration 2.000, 1/2 den 5.000, sau do dung full resolution.
+- `pose_aware_sampling=true`: giu moi train camera mot lan va lap them toi da mot lan cho khoang 25% camera gan cac test pose thua coverage.
 - `eval=false` de dung toan bo 240 anh train, khong LLFF-hold anh.
 - `data_device=cpu` de 240 anh va edge map khong chiem bo nho GPU Kaggle.
 - `postprocess_script=vai_render.py`.
-- Render JPEG theo dung ten `.JPG` trong CSV vao
-  `/kaggle/working/vai_renders/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/<set>/<scene>`.
+- Render JPEG theo dung ten `.JPG` trong CSV vao `/kaggle/working/vai_renders/<set>/<scene>`.
 - Neu `save_png=true`, luu them PNG lossless vao
-  `/kaggle/working/vai_png/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/<set>/<scene>`.
+  `/kaggle/working/vai_png/<set>/<scene>`.
 - Redistort bang bicubic interpolation.
 - Unsharp mask voi `amount=1.0`, `sigma=0.60`.
 - Luu JPEG voi `quality=95`, `subsampling=2` (4:2:0).
-- Danh gia public GT vao
-  `/kaggle/working/vai_eval/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/<set>/<scene>.json`.
+- Danh gia public GT vao `/kaggle/working/vai_eval/<set>/<scene>.json`.
 - Ghi summary tuong thich batch runner vao `result_test.json` cua model.
 
 Kiem tra command truoc:
@@ -114,14 +95,13 @@ Co the render lai checkpoint ma khong train:
 
 ```bash
 python vai_render.py \
-  -s /kaggle/working/vai_mvsplat_init_native_simple_radial/public_set/HCM0204 \
-  -m /kaggle/working/vai_models/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set/HCM0204 \
-  --iteration 30000 \
-  --output_root /kaggle/working/vai_renders/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set \
-  --eval_root /kaggle/working/vai_eval/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set \
+  -s /kaggle/working/vai_cleaned/HCM0204 \
+  -m /kaggle/working/vai_models/HCM0204 \
+  --output_root /kaggle/working/vai_renders \
+  --eval_root /kaggle/working/vai_eval \
   --output_extension csv \
   --save_png true \
-  --png_root /kaggle/working/vai_png/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set \
+  --png_root /kaggle/working/vai_png \
   --redistort_interpolation bicubic \
   --sharpen_amount 1.0 \
   --sharpen_sigma 0.60 \
@@ -139,9 +119,9 @@ Renderer van sinh day du JPEG va PNG.
 
 ```bash
 python vai_evaluate.py \
-  --source_path /kaggle/working/vai_mvsplat_init_native_simple_radial/public_set/HCM0204 \
-  --render_dir /kaggle/working/vai_renders/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set/HCM0204 \
-  --output /kaggle/working/vai_eval/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set/HCM0204.json \
+  --source_path /kaggle/working/vai_cleaned/HCM0204 \
+  --render_dir /kaggle/working/vai_renders/HCM0204 \
+  --output /kaggle/working/vai_eval/HCM0204.json \
   --output_extension csv \
   --lpips_net alex \
   --psnr_max 40
@@ -159,16 +139,16 @@ Weighted score duoc tinh bang:
 python vai_package.py \
   --phase_dir /kaggle/input/datasets/xuanph/phase1/phase1 \
   --set_name public_set \
-  --submission_dir /kaggle/working/vai_renders/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set \
-  --zip_path /kaggle/working/public_set_mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025_jpeg.zip \
+  --submission_dir /kaggle/working/vai_renders \
+  --zip_path /kaggle/working/HCM0204_render.zip \
   --subset HCM0204 \
   --output_extension csv
 
 python vai_package.py \
   --phase_dir /kaggle/input/datasets/xuanph/phase1/phase1 \
   --set_name public_set \
-  --submission_dir /kaggle/working/vai_png/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set \
-  --zip_path /kaggle/working/public_set_mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025_png.zip \
+  --submission_dir /kaggle/working/vai_png \
+  --zip_path /kaggle/working/public_set_png.zip \
   --subset HCM0204 \
   --output_extension png
 ```
@@ -193,13 +173,12 @@ SCENE_NAMES = []                          # tat ca scene trong set
 EVALUATE = SET_NAME == "public_set"
 REQUIRE_GT = EVALUATE
 SAVE_PNG = True
-EXPERIMENT_NAME = "mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025"
 ```
 
 De chay private, doi `SET_NAME` thanh ten thu muc private, vi du
 `private_set1`. Notebook tu tao `VAI_CONFIG["scenes"]`, preprocess dung danh
 sach da chon, batch runner train/render tung scene, va package chung cac scene
-vao ZIP JPEG va PNG co ten theo `SET_NAME` va `EXPERIMENT_NAME`.
+vao `public_set_jpeg.zip` va `public_set_png.zip` (ten thay doi theo `SET_NAME`).
 Public set tao them ZIP evaluation; private set bo qua evaluation.
 
 De thay doi iterations, budget Gaussian, duong dan output, tham so sharpen, JPEG,
@@ -207,32 +186,37 @@ evaluation hoac cac train/render argument khac, chi sua cell `VAI_CONFIG` o dau
 notebook. Co the them argument moi vao `train_args` hoac `postprocess_args` ngay trong
 cell nay ma khong can sua file Python hay JSON trong repository.
 
-## 7. MVSplat-init + ImprovedGS thuan
+## 7. MVSplat-init + ImprovedGS thuan tren main
 
-Nhanh `agent/mvsplat-init-improvedgs` dung MVSplat nhu mot buoc khoi tao hinh
-hoc duy nhat. MVSplat khong nam trong training loop: CLI chi ghi
-`sparse/0/points3D.ply` gom XYZ/RGB, sau do `GaussianModel.create_from_pcd`
-cua ImprovedGS tu khoi tao scale, rotation, opacity va SH. Vi vay LAS, EAS, RAP
-va MU van la ImprovedGS thuan; khong co loss hay densification cua HF-GS.
+Nhanh `agent/mvsplat-init-improvedgs` dung MVSplat duy nhat de bo sung hinh hoc
+cho point cloud khoi tao. Pipeline van preprocess y het `main`:
 
-Pipeline giu bo anh/camera `SIMPLE_RADIAL` cho train va render. Moi context cua
-MVSplat duoc undistort tam thoi trong RAM thanh pinhole 256x256. Cac cap anh
-duoc chon bang shared COLMAP tracks, baseline theo robust scene diagonal va
-phan bo deu tren trajectory. Near/far duoc suy ra theo sparse depth cua tung
-camera. Point du doan phai qua cac bo loc:
+```text
+SIMPLE_RADIAL raw
+  -> COLMAP image_undistorter
+  -> PINHOLE RGBA + alpha mask
+  -> MVSplat geometry-only -> sparse/0/points3D.ply
+  -> ImprovedGS thuan
+```
 
-- opacity cua MVSplat;
-- valid SIMPLE_RADIAL-to-PINHOLE mask;
-- near/far camera;
-- relative-depth consistency voi view con lai;
-- expanded sparse-scene bounds;
-- voxel dedup, trong do sparse COLMAP goc luon la anchor.
+Initializer doc camera `PINHOLE`/`SIMPLE_PINHOLE` va anh RGBA da undistort. Alpha
+mask duoc dua vao valid mask cua MVSplat, nen vung den ngoai bien undistort khong
+tao point. Sparse COLMAP goc van la anchor; point MVSplat phai qua opacity,
+cross-view depth consistency, scene bounds va voxel dedup truoc khi duoc merge.
+MVSplat khong tham gia loss, sampling, densification hay training loop.
 
-Chay rieng initializer sau `vai_preprocess.py --native_simple_radial`:
+Chay sau preprocess chuan, khong truyen `--native_simple_radial` va khong truyen
+bat ky flag P1 nao:
 
 ```bash
+python vai_preprocess.py \
+  --input /kaggle/input/datasets/xuanph/phase1/phase1/public_set \
+  --output /kaggle/working/vai_mvsplat_init_cleaned/public_set \
+  --subset HCM0204 \
+  --overwrite
+
 python -u vai_mvsplat_init.py \
-  --data_root /kaggle/working/vai_mvsplat_init_native_simple_radial/public_set \
+  --data_root /kaggle/working/vai_mvsplat_init_cleaned/public_set \
   --mvsplat_repo /kaggle/working/mvsplat \
   --checkpoint /kaggle/working/mvsplat_checkpoints/re10k.ckpt \
   --checkpoint_sha256 83d0d9eaa753fa4a1f925288dc1f90b8c3297fad0ab0f6ed1f11a1c5946da25a \
@@ -248,7 +232,7 @@ python -u vai_mvsplat_init.py \
 ```
 
 Notebook pin MVSplat tai commit
-`01f9a28edb5eb68416e7e63b01f8d90c3bdfbf01`, kiem tra SHA256 checkpoint,
-khong cai COLMAP/OpenCV va khong pin NumPy. Cau hinh training sau initializer
-la `training_method=improvedgs`, 30.000 iteration, budget 5,5 trieu va
-`densify_grad_threshold=0.00025`.
+`01f9a28edb5eb68416e7e63b01f8d90c3bdfbf01` va kiem tra SHA256 checkpoint.
+Training sau initializer la `training_method=improvedgs`, 30.000 iteration,
+`coarse_to_fine=false`, `pose_aware_sampling=false`,
+`densify_grad_threshold=0.00025` va budget 5,5 trieu.

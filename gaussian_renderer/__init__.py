@@ -20,26 +20,6 @@ from scene.gaussian_model import GaussianModel as GaussianModel3DGS
 RenderCamera = Camera | MiniCam
 
 
-def _camera_projection_parameters(
-    viewpoint_camera: RenderCamera,
-    tanfovx: float,
-    tanfovy: float,
-) -> tuple[int, float, float, float, float, float]:
-    """Resolve the camera model and scaled intrinsics passed to CUDA."""
-    camera_model = str(getattr(viewpoint_camera, "camera_model", "PINHOLE"))
-    if camera_model not in {"PINHOLE", "SIMPLE_PINHOLE", "SIMPLE_RADIAL"}:
-        raise ValueError(f"Camera model khong duoc rasterizer ho tro: {camera_model}")
-    model_id = 1 if camera_model == "SIMPLE_RADIAL" else 0
-    width = int(viewpoint_camera.image_width)
-    height = int(viewpoint_camera.image_height)
-    focal_x = float(getattr(viewpoint_camera, "fx", width / (2.0 * tanfovx)))
-    focal_y = float(getattr(viewpoint_camera, "fy", height / (2.0 * tanfovy)))
-    principal_x = float(getattr(viewpoint_camera, "cx", 0.5 * width))
-    principal_y = float(getattr(viewpoint_camera, "cy", 0.5 * height))
-    radial_k = float(getattr(viewpoint_camera, "radial_k", 0.0))
-    return model_id, focal_x, focal_y, principal_x, principal_y, radial_k
-
-
 def _apply_trained_exposure(rendered_image: torch.Tensor, pc: Any, viewpoint_camera: RenderCamera) -> torch.Tensor:
     """
         Apply the per-image exposure matrix learned during training.
@@ -131,25 +111,11 @@ def _build_minigs_raster_settings(
     """
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
-    (
-        camera_model,
-        focal_x,
-        focal_y,
-        principal_x,
-        principal_y,
-        radial_k,
-    ) = _camera_projection_parameters(viewpoint_camera, tanfovx, tanfovy)
     return GaussianRasterizationSettings(
         image_height=int(viewpoint_camera.image_height),
         image_width=int(viewpoint_camera.image_width),
         tanfovx=tanfovx,
         tanfovy=tanfovy,
-        focal_x=focal_x,
-        focal_y=focal_y,
-        principal_x=principal_x,
-        principal_y=principal_y,
-        radial_k=radial_k,
-        camera_model=camera_model,
         bg=bg_color,
         scale_modifier=scaling_modifier,
         viewmatrix=viewpoint_camera.world_view_transform,
@@ -181,25 +147,11 @@ def _build_3dgs_raster_settings(
     """
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
-    (
-        camera_model,
-        focal_x,
-        focal_y,
-        principal_x,
-        principal_y,
-        radial_k,
-    ) = _camera_projection_parameters(viewpoint_camera, tanfovx, tanfovy)
     return GaussianRasterizationSettings(
         image_height=int(viewpoint_camera.image_height),
         image_width=int(viewpoint_camera.image_width),
         tanfovx=tanfovx,
         tanfovy=tanfovy,
-        focal_x=focal_x,
-        focal_y=focal_y,
-        principal_x=principal_x,
-        principal_y=principal_y,
-        radial_k=radial_k,
-        camera_model=camera_model,
         bg=bg_color,
         scale_modifier=scaling_modifier,
         viewmatrix=viewpoint_camera.world_view_transform,

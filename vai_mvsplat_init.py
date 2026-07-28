@@ -9,7 +9,7 @@ from vai.mvsplat_init import initialize_dataset
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="MVSplat geometry-only initializer for native ImprovedGS",
+        description="MVSplat geometry-only initializer for main ImprovedGS",
     )
     parser.add_argument("--data_root", required=True)
     parser.add_argument("--mvsplat_repo", required=True)

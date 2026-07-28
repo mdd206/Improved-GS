@@ -24,6 +24,7 @@ from vai.mvsplat_init import (
     VoxelPointMerger,
     filter_pair_predictions,
     initialize_scene,
+    prepare_pinhole_view,
     select_context_pairs,
 )
 
@@ -164,6 +165,39 @@ class ConsistencyFilterTests(unittest.TestCase):
         self.assertEqual(stats["predicted_points"], 8)
 
 
+class PinholeViewTests(unittest.TestCase):
+    def test_rgba_alpha_mask_is_preserved_in_mvsplat_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "view.png"
+            pixels = np.zeros((8, 8, 4), dtype=np.uint8)
+            pixels[..., :3] = (100, 120, 140)
+            pixels[2:6, 2:6, 3] = 255
+            PilImage.fromarray(pixels, mode="RGBA").save(image_path)
+            camera = Camera(
+                id=1,
+                model="PINHOLE",
+                width=8,
+                height=8,
+                params=np.asarray([8.0, 8.0, 4.0, 4.0], dtype=np.float64),
+            )
+            image = make_image(1, "view.png", 0.0, ())
+
+            prepared = prepare_pinhole_view(
+                image_path,
+                camera,
+                image,
+                near=1.0,
+                far=3.0,
+                image_size=8,
+            )
+
+            self.assertEqual(tuple(prepared.image.shape), (3, 8, 8))
+            self.assertEqual(tuple(prepared.valid_mask.shape), (8, 8))
+            self.assertTrue(bool(prepared.valid_mask[3, 3]))
+            self.assertFalse(bool(prepared.valid_mask[0, 0]))
+            self.assertEqual(float(prepared.image[:, 0, 0].abs().sum()), 0.0)
+
+
 class VoxelMergeTests(unittest.TestCase):
     def test_original_points_are_anchors_and_best_new_confidence_wins(self) -> None:
         original = {
@@ -219,14 +253,18 @@ class SceneIntegrationTests(unittest.TestCase):
             sparse_dir = scene / "sparse" / "0"
             image_dir.mkdir(parents=True)
             sparse_dir.mkdir(parents=True)
-            PilImage.new("RGB", (8, 8), (100, 120, 140)).save(image_dir / "a.JPG")
-            PilImage.new("RGB", (8, 8), (110, 130, 150)).save(image_dir / "b.JPG")
+            PilImage.new("RGBA", (8, 8), (100, 120, 140, 255)).save(
+                image_dir / "a.png"
+            )
+            PilImage.new("RGBA", (8, 8), (110, 130, 150, 255)).save(
+                image_dir / "b.png"
+            )
             camera = Camera(
                 id=1,
-                model="SIMPLE_RADIAL",
+                model="PINHOLE",
                 width=8,
                 height=8,
-                params=np.asarray([8.0, 4.0, 4.0, 0.0], dtype=np.float64),
+                params=np.asarray([8.0, 8.0, 4.0, 4.0], dtype=np.float64),
             )
             write_intrinsics_binary({1: camera}, sparse_dir / "cameras.bin")
             points = {
@@ -247,8 +285,8 @@ class SceneIntegrationTests(unittest.TestCase):
                 )
             }
             images = {
-                1: make_image(1, "a.JPG", 0.0, tuple(points)),
-                2: make_image(2, "b.JPG", 0.1, tuple(points)),
+                1: make_image(1, "a.png", 0.0, tuple(points)),
+                2: make_image(2, "b.png", 0.1, tuple(points)),
             }
             write_extrinsics_binary(images, sparse_dir / "images.bin")
             write_points3d_binary(points, sparse_dir / "points3D.bin")
@@ -256,8 +294,8 @@ class SceneIntegrationTests(unittest.TestCase):
                 json.dump(
                     {
                         "format_version": 1,
-                        "native_simple_radial": True,
-                        "fixed_pose_retriangulation": {"enabled": False},
+                        "original_camera": {"model": "SIMPLE_RADIAL"},
+                        "undistorted_camera": {"model": "PINHOLE"},
                     },
                     handle,
                 )

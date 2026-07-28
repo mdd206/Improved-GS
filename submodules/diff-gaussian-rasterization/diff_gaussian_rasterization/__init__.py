@@ -54,12 +54,6 @@ def _build_forward_args(
         raster_settings.projmatrix,
         raster_settings.tanfovx,
         raster_settings.tanfovy,
-        raster_settings.focal_x,
-        raster_settings.focal_y,
-        raster_settings.principal_x,
-        raster_settings.principal_y,
-        raster_settings.radial_k,
-        raster_settings.camera_model,
         raster_settings.image_height,
         raster_settings.image_width,
         dc,
@@ -246,12 +240,6 @@ class _RasterizeGaussians(torch.autograd.Function):
                 raster_settings.projmatrix, 
                 raster_settings.tanfovx, 
                 raster_settings.tanfovy, 
-                raster_settings.focal_x,
-                raster_settings.focal_y,
-                raster_settings.principal_x,
-                raster_settings.principal_y,
-                raster_settings.radial_k,
-                raster_settings.camera_model,
                 color,
                 invdepths,
                 grad_out_color,
@@ -299,12 +287,6 @@ class GaussianRasterizationSettings(NamedTuple):
     image_width: int 
     tanfovx : float
     tanfovy : float
-    focal_x : float
-    focal_y : float
-    principal_x : float
-    principal_y : float
-    radial_k : float
-    camera_model : int
     bg : torch.Tensor
     scale_modifier : float
     viewmatrix : torch.Tensor

@@ -243,7 +243,7 @@ def estimate_depth_bounds(
     return float(near), float(far)
 
 
-def prepare_simple_radial_view(
+def prepare_pinhole_view(
     image_path: str | Path,
     camera: Camera,
     image: Image,
@@ -252,30 +252,45 @@ def prepare_simple_radial_view(
     image_size: int = 256,
     focal_scale: float = 1.0,
 ) -> PreparedView:
-    """Undistort SIMPLE_RADIAL truc tiep vao pinhole vuong ma khong can COLMAP."""
-    if camera.model != "SIMPLE_RADIAL" or len(camera.params) != 4:
-        raise ValueError(f"MVSplat-init can SIMPLE_RADIAL, nhan duoc {camera.model}")
+    """Resize/crop mot view PINHOLE RGBA da preprocess vao context vuong cua MVSplat."""
+    if camera.model == "PINHOLE" and len(camera.params) == 4:
+        focal_x, focal_y, center_x, center_y = [
+            float(value) for value in camera.params
+        ]
+    elif camera.model == "SIMPLE_PINHOLE" and len(camera.params) == 3:
+        focal, center_x, center_y = [float(value) for value in camera.params]
+        focal_x = focal_y = focal
+    else:
+        raise ValueError(
+            "MVSplat-init tren main yeu cau PINHOLE/SIMPLE_PINHOLE, "
+            f"nhan duoc {camera.model}"
+        )
     if int(image_size) <= 0 or int(image_size) % 4 != 0:
         raise ValueError("mvsplat_image_size phai duong va chia het cho 4")
     if float(focal_scale) <= 0.0:
         raise ValueError("mvsplat_focal_scale phai duong")
 
     with PilImage.open(image_path) as source_image:
-        source_rgb = np.asarray(source_image.convert("RGB"), dtype=np.float32) / 255.0
-    height, width = source_rgb.shape[:2]
+        if source_image.mode != "RGBA":
+            raise ValueError(
+                f"Anh MVSplat-init phai la RGBA tu main preprocess: {image_path}"
+            )
+        source_rgba = np.asarray(source_image, dtype=np.float32) / 255.0
+    height, width = source_rgba.shape[:2]
     if (width, height) != (int(camera.width), int(camera.height)):
         raise ValueError(
             f"Kich thuoc anh {image.name} khong khop cameras.bin: "
             f"{width}x{height} != {camera.width}x{camera.height}"
         )
 
-    focal, cx, cy, radial_k = [float(value) for value in camera.params]
     target_size = int(image_size)
-    normalized_focal = focal / float(min(width, height)) * float(focal_scale)
+    source_scale = float(min(width, height))
+    normalized_focal_x = focal_x / source_scale * float(focal_scale)
+    normalized_focal_y = focal_y / source_scale * float(focal_scale)
     intrinsics = np.asarray(
         [
-            [normalized_focal, 0.0, 0.5],
-            [0.0, normalized_focal, 0.5],
+            [normalized_focal_x, 0.0, 0.5],
+            [0.0, normalized_focal_y, 0.5],
             [0.0, 0.0, 1.0],
         ],
         dtype=np.float32,
@@ -285,11 +300,9 @@ def prepare_simple_radial_view(
     ys, xs = torch.meshgrid(coordinates, coordinates, indexing="ij")
     xu = (xs - float(intrinsics[0, 2])) / float(intrinsics[0, 0])
     yu = (ys - float(intrinsics[1, 2])) / float(intrinsics[1, 1])
-    radius_squared = xu * xu + yu * yu
-    distortion = 1.0 + float(radial_k) * radius_squared
-    source_x = focal * xu * distortion + cx
-    source_y = focal * yu * distortion + cy
-    valid_mask = (
+    source_x = focal_x * xu + center_x
+    source_y = focal_y * yu + center_y
+    bounds_mask = (
         (source_x >= 0.0)
         & (source_x <= max(width - 1, 0))
         & (source_y >= 0.0)
@@ -298,15 +311,16 @@ def prepare_simple_radial_view(
     grid_x = source_x * (2.0 / max(width - 1, 1)) - 1.0
     grid_y = source_y * (2.0 / max(height - 1, 1)) - 1.0
     grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-    source_tensor = torch.from_numpy(source_rgb).permute(2, 0, 1).unsqueeze(0)
-    pinhole = functional.grid_sample(
+    source_tensor = torch.from_numpy(source_rgba).permute(2, 0, 1).unsqueeze(0)
+    sampled_rgba = functional.grid_sample(
         source_tensor,
         grid,
         mode="bilinear",
         padding_mode="zeros",
         align_corners=True,
     ).squeeze(0)
-    pinhole = pinhole * valid_mask.unsqueeze(0)
+    valid_mask = bounds_mask & (sampled_rgba[3] > 0.5)
+    pinhole = sampled_rgba[:3] * valid_mask.unsqueeze(0)
     c2w, w2c = _camera_matrices(image)
     return PreparedView(
         image_id=int(image.id),
@@ -800,10 +814,17 @@ def initialize_scene(
         if not required.exists():
             raise FileNotFoundError(f"Scene MVSplat-init thieu: {required}")
     metadata = load_vai_metadata(scene_path)
-    if not bool(metadata.get("native_simple_radial", False)):
-        raise ValueError("MVSplat-init nay yeu cau main pipeline native SIMPLE_RADIAL")
+    if bool(metadata.get("native_simple_radial", False)):
+        raise ValueError(
+            "MVSplat-init ImprovedGS thuan khong nhan scene native SIMPLE_RADIAL"
+        )
     if metadata.get("fixed_pose_retriangulation", {}).get("enabled"):
         raise ValueError("Khong ket hop P1 voi MVSplat-init trong cung mot ablation")
+    undistorted_camera = metadata.get("undistorted_camera", {})
+    if undistorted_camera.get("model") not in {"PINHOLE", "SIMPLE_PINHOLE"}:
+        raise ValueError(
+            "Scene MVSplat-init phai den tu main preprocess PINHOLE RGBA"
+        )
     output_ply = sparse_dir / "points3D.ply"
     if output_ply.exists() and not overwrite:
         raise FileExistsError(f"{output_ply} da ton tai; dung --overwrite de tao lai")
@@ -812,6 +833,10 @@ def initialize_scene(
     if len(cameras) != 1:
         raise ValueError(f"VAI MVSplat-init yeu cau mot camera, nhan {len(cameras)}")
     camera = next(iter(cameras.values()))
+    if camera.model not in {"PINHOLE", "SIMPLE_PINHOLE"}:
+        raise ValueError(
+            f"Camera MVSplat-init phai la PINHOLE, nhan duoc {camera.model}"
+        )
     images = read_extrinsics_binary(sparse_dir / "images.bin")
     images = {
         key: image
@@ -849,7 +874,7 @@ def initialize_scene(
                     scene_diagonal,
                 )
             near, far = bounds[image_id]
-            prepared[image_id] = prepare_simple_radial_view(
+            prepared[image_id] = prepare_pinhole_view(
                 image_dir / image_record.name,
                 camera,
                 image_record,

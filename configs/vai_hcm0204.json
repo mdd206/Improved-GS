@@ -1,6 +1,6 @@
 {
-  "data_root": "/kaggle/working/vai_mvsplat_init_native_simple_radial/public_set",
-  "output_root": "/kaggle/working/vai_models/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set",
+  "data_root": "/kaggle/working/vai_mvsplat_init_cleaned/public_set",
+  "output_root": "/kaggle/working/vai_models/mvsplat_init_improvedgs_30k_5m5_dense00025/public_set",
   "repeat": 1,
   "python_executable": "python",
   "gpu_auto_select": false,
@@ -28,11 +28,11 @@
   },
 
   "postprocess_args": {
-    "output_root": "/kaggle/working/vai_renders/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set",
-    "eval_root": "/kaggle/working/vai_eval/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set",
+    "output_root": "/kaggle/working/vai_renders/mvsplat_init_improvedgs_30k_5m5_dense00025/public_set",
+    "eval_root": "/kaggle/working/vai_eval/mvsplat_init_improvedgs_30k_5m5_dense00025/public_set",
     "output_extension": "csv",
     "save_png": true,
-    "png_root": "/kaggle/working/vai_png/mvsplat_init_native_simple_radial_improvedgs_30k_5m5_dense00025/public_set",
+    "png_root": "/kaggle/working/vai_png/mvsplat_init_improvedgs_30k_5m5_dense00025/public_set",
     "redistort_interpolation": "bicubic",
     "sharpen_amount": 1.0,
     "sharpen_sigma": 0.60,
