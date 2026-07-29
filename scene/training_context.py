@@ -67,6 +67,7 @@ def initialize_runtime_state(
     gaussians: GaussianModel3DGS,
     opt: Any,
     method_config: dict[str, Any],
+    train_cameras_override: Optional[list[Any]] = None,
 ) -> RuntimeState:
     """
         Create method-specific runtime state after the scene and model exist.
@@ -77,7 +78,13 @@ def initialize_runtime_state(
     """
     method = str(method_config.get("training_method", "3dgs")).lower()
     training_resolution_scale = resolve_training_resolution_scale(1, opt)
-    train_cameras = scene.getTrainCameras(training_resolution_scale).copy()
+    train_cameras = (
+        list(train_cameras_override)
+        if train_cameras_override is not None
+        else scene.getTrainCameras(training_resolution_scale).copy()
+    )
+    if not train_cameras:
+        raise ValueError("Training runtime requires at least one train camera.")
     runtime_state: RuntimeState = {
         "edge_maps": [],
         "edge_camera_pool": [],
@@ -156,10 +163,17 @@ def attach_scene_and_gaussians_to_context(
     context: TrainingContext,
     scene: Scene,
     gaussians: GaussianModel3DGS,
+    train_cameras_override: Optional[list[Any]] = None,
 ) -> TrainingContext:
     """
         Attach scene-dependent objects and initialize the runtime-state cache.
     """
     context.scene = scene
-    context.runtime_state = initialize_runtime_state(scene, gaussians, context.opt, context.method_config)
+    context.runtime_state = initialize_runtime_state(
+        scene,
+        gaussians,
+        context.opt,
+        context.method_config,
+        train_cameras_override=train_cameras_override,
+    )
     return context

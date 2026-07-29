@@ -185,3 +185,57 @@ De thay doi iterations, budget Gaussian, duong dan output, tham so sharpen, JPEG
 evaluation hoac cac train/render argument khac, chi sua cell `VAI_CONFIG` o dau
 notebook. Co the them argument moi vao `train_args` hoac `postprocess_args` ngay trong
 cell nay ma khong can sua file Python hay JSON trong repository.
+
+## 7. Fine-tune mot model rieng cho tung test pose
+
+Notebook
+[notebooks/vai_test_pose_finetune.ipynb](notebooks/vai_test_pose_finetune.ipynb)
+dung model ImprovedGS 30k co san va thuc hien test-time fine-tuning doc lap:
+
+1. Moi test pose tao mot Gaussian model moi tu PLY `iteration_30000`. Model cua
+   pose truoc khong duoc dung lam khoi tao cho pose sau.
+2. Tinh `sigma` bang median nearest-neighbor spacing giua cac train camera.
+3. Cham moi train camera bang
+   `exp(-d^2 / (2 * (3 * sigma)^2)) * max(0, cos(theta))^2`.
+4. Chon dung top-25 camera va chi nap 25 camera nay vao pool train/EAS.
+5. Chay 3.000 optimizer update; LAS densify/split trong 1.500 step dau.
+6. Tat coarse-to-fine va tat pose-aware sampling cu.
+7. Render test pose tuong ung, sau do giai phong model truoc khi load lai PLY
+   30k. Mac dinh khong ghi PLY tung pose de tranh het dia Kaggle.
+
+CLI tuong ung:
+
+```bash
+python vai_test_pose_finetune.py \
+  --source_path /kaggle/working/vai_native_simple_radial/public_set/HCM0204 \
+  --base_model_path /kaggle/input/SLUG/models/vai_models/HCM0204 \
+  --base_iteration 30000 \
+  --model_path /kaggle/working/vai_test_pose_models/public_set/HCM0204 \
+  --fine_tune_steps 3000 \
+  --split_from_step 0 \
+  --split_until_step 1500 \
+  --top_k 25 \
+  --sigma_multiplier 3 \
+  --save_pose_models false \
+  --training_method improvedgs \
+  --use_las true \
+  --use_eas true \
+  --use_rap true \
+  --use_mu true \
+  --coarse_to_fine false \
+  --pose_aware_sampling false \
+  --densify_grad_threshold 0.0002 \
+  --budget 5500000 \
+  --resolution -1 \
+  --data_device cpu \
+  --eval false \
+  --output_root /kaggle/working/vai_test_pose_submission/public_set \
+  --overwrite true
+```
+
+`--budget` phai lon hon hoac bang so Gaussian cua PLY 30k. Notebook doc budget
+tu `training_parameters.json` cua base model de tranh vo tinh dung default thap
+hon model. Moi thu muc pose co `view_selection.json`; file nay ghi `sigma`, score,
+khoang cach, cosine va thu tu top-25 de audit. Manifest tong nam tai
+`test_pose_finetune_manifest.json`. Neu can giu model 33k cua tung pose, dat
+`--save_pose_models true`; can du tru dung luong rat lon cho moi PLY.

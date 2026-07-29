@@ -65,6 +65,7 @@ def _load_or_create_gaussians(
     loaded_iter: int | None,
     cameras_extent: float,
     args: GroupParams,
+    load_model_path: str | None = None,
 ) -> None:
     """
         Fill the Gaussian model either from a saved iteration or the initial point cloud.
@@ -73,17 +74,29 @@ def _load_or_create_gaussians(
         that accept slightly different `load_ply` or `create_from_pcd` arguments.
     """
     if loaded_iter:
+        resolved_load_model_path = load_model_path or model_path
         ply_path = os.path.join(
-            model_path,
+            resolved_load_model_path,
             "point_cloud",
             "iteration_" + str(loaded_iter),
             "point_cloud.ply",
         )
+        if not os.path.isfile(ply_path):
+            raise FileNotFoundError("Could not find saved Gaussian PLY: {}".format(ply_path))
         load_ply_signature = inspect.signature(gaussians.load_ply)
         if "use_train_test_exp" in load_ply_signature.parameters:
             gaussians.load_ply(ply_path, args.train_test_exp)
         else:
             gaussians.load_ply(ply_path)
+        # PLY stores Gaussian tensors only. Restore the scene-dependent state
+        # required to create a fresh optimizer for fine-tuning.
+        gaussians.spatial_lr_scale = cameras_extent
+        initialize_exposure = getattr(gaussians, "initialize_exposure_parameters", None)
+        if initialize_exposure is not None:
+            initialize_exposure(
+                scene_info.train_cameras,
+                os.path.join(resolved_load_model_path, "exposure.json"),
+            )
         return
 
     create_signature = inspect.signature(gaussians.create_from_pcd)
@@ -107,6 +120,7 @@ class Scene:
         load_iteration: int | None = None,
         shuffle: bool = True,
         resolution_scales: list[float] | None = None,
+        load_model_path: str | None = None,
     ) -> None:
         """
             Load cameras, scene bounds, and Gaussian state for one experiment.
@@ -114,22 +128,33 @@ class Scene:
         if resolution_scales is None:
             resolution_scales = [1.0]
         self.model_path = args.model_path
+        self.load_model_path = load_model_path or self.model_path
         self.loaded_iter = None
         self.gaussians = gaussians
 
         if load_iteration:
             if load_iteration == -1:
-                self.loaded_iter = searchForMaxIteration(os.path.join(self.model_path, "point_cloud"))
+                self.loaded_iter = searchForMaxIteration(
+                    os.path.join(self.load_model_path, "point_cloud")
+                )
             else:
                 self.loaded_iter = load_iteration
-            print("Loading trained model at iteration {}".format(self.loaded_iter))
+            print(
+                "Loading trained model at iteration {} from {}".format(
+                    self.loaded_iter,
+                    self.load_model_path,
+                )
+            )
 
         self.train_cameras = {}
         self.test_cameras = {}
 
         scene_info = _load_scene_info(args)
 
-        if not self.loaded_iter:
+        loading_from_separate_model = (
+            os.path.abspath(self.load_model_path) != os.path.abspath(self.model_path)
+        )
+        if not self.loaded_iter or loading_from_separate_model:
             _write_initial_scene_files(self.model_path, scene_info)
 
         if shuffle:
@@ -151,6 +176,7 @@ class Scene:
             self.loaded_iter,
             self.cameras_extent,
             args,
+            self.load_model_path,
         )
 
     def save(self, iteration: int) -> None:

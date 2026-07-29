@@ -66,6 +66,40 @@ class GaussianModelIOMixin:
         exposure = torch.eye(3, 4, device="cuda")[None].repeat(len(cam_infos), 1, 1)
         self._exposure = nn.Parameter(exposure.requires_grad_(True))
 
+    def initialize_exposure_parameters(
+        self,
+        cam_infos: list[Any],
+        exposure_file: str = "",
+    ) -> None:
+        """Create trainable exposure tensors, optionally initialized from JSON."""
+        self.exposure_mapping = {
+            cam_info.image_name: idx for idx, cam_info in enumerate(cam_infos)
+        }
+        exposure = torch.eye(3, 4, device="cuda")[None].repeat(
+            len(cam_infos),
+            1,
+            1,
+        )
+        if exposure_file and os.path.isfile(exposure_file):
+            with open(exposure_file, "r", encoding="utf-8") as handle:
+                saved_exposures = json.load(handle)
+            for image_name, exposure_index in self.exposure_mapping.items():
+                saved_value = saved_exposures.get(image_name)
+                if saved_value is None:
+                    continue
+                saved_tensor = torch.as_tensor(
+                    saved_value,
+                    dtype=exposure.dtype,
+                    device=exposure.device,
+                )
+                if tuple(saved_tensor.shape) != (3, 4):
+                    raise ValueError(
+                        "Exposure for {} must have shape [3, 4].".format(image_name)
+                    )
+                exposure[exposure_index] = saved_tensor
+        self.pretrained_exposures = None
+        self._exposure = nn.Parameter(exposure.requires_grad_(True))
+
     def construct_list_of_attributes(self) -> list[str]:
         """
             Build the ordered PLY attribute list for all saved Gaussian fields.
