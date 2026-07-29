@@ -192,8 +192,10 @@ Notebook
 [notebooks/vai_test_pose_finetune.ipynb](notebooks/vai_test_pose_finetune.ipynb)
 dung pipeline ImprovedGS thuan tren `main`: preprocess camera SIMPLE_RADIAL sang
 PINHOLE RGBA, load model ImprovedGS 30k co san, fine-tune, render PINHOLE, roi
-redistort ve anh nop bai. Thi nghiem nay khong dung D3/native SIMPLE_RADIAL,
-coarse-to-fine hay pose-aware sampling.
+redistort ve anh nop bai. Base checkpoint 30k duoc phep da train voi
+coarse-to-fine hoac pose-aware sampling, nhung stage fine-tune 3k luon tat ca
+hai co che nay va chi dung top-25 view da chon. Thi nghiem khong dung D3/native
+SIMPLE_RADIAL.
 
 Fine-tuning duoc thuc hien doc lap nhu sau:
 

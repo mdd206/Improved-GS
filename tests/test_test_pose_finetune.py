@@ -192,6 +192,14 @@ class TestPoseFineTuneCliTests(unittest.TestCase):
         self.assertIn("'--pose_count', str(POSE_COUNT)", source)
         self.assertIn("'--coarse_to_fine', 'false'", source)
         self.assertIn("'--pose_aware_sampling', 'false'", source)
+        self.assertIn(
+            "'co che nay se bi tat trong 3k step fine-tune.'",
+            source,
+        )
+        self.assertNotIn(
+            "raise ValueError(f'Base model dang bat {disabled_flag}",
+            source,
+        )
         self.assertIn("'--training_method', 'improvedgs'", source)
         self.assertIn("REPO_BRANCH = 'agent/test-pose-finetune'", source)
         self.assertIn("'git', 'clone', '--recursive', '--branch', REPO_BRANCH", source)
