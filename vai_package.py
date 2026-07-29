@@ -15,6 +15,8 @@ def main() -> int:
     parser.add_argument("--zip_path", required=True)
     parser.add_argument("--subset", nargs="*", default=[])
     parser.add_argument("--output_extension", default="csv")
+    parser.add_argument("--pose_start_index", type=int, default=0)
+    parser.add_argument("--pose_count", type=int, default=-1)
     parser.add_argument("--keep_csv_extension", action="store_true")
     parser.add_argument("--allow_extra", action="store_true")
     args = parser.parse_args()
@@ -28,6 +30,8 @@ def main() -> int:
         subset=args.subset,
         output_extension=output_extension,
         allow_extra=args.allow_extra,
+        pose_start_index=args.pose_start_index,
+        pose_count=args.pose_count,
     )
     for scene_name, count in counts.items():
         print(f"{scene_name}: {count} images OK")

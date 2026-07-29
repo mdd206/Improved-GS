@@ -31,6 +31,8 @@ def build_parser() -> tuple[
     parser.add_argument("--base_iteration", default=30_000, type=int)
     parser.add_argument("--test_poses", default="")
     parser.add_argument("--scene_name", default="")
+    parser.add_argument("--pose_start_index", default=0, type=int)
+    parser.add_argument("--pose_count", default=-1, type=int)
     parser.add_argument("--fine_tune_steps", default=3_000, type=int)
     parser.add_argument("--split_from_step", default=0, type=int)
     parser.add_argument("--split_until_step", default=1_500, type=int)

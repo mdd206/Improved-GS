@@ -22,6 +22,7 @@ from scene.training_context import (
 )
 from scene.training_loop import (
     run_3dgs_parameter_update_method,
+    should_run_parameter_update,
     update_3dgs_training_schedule,
 )
 from scene.training_runtime import (
@@ -43,6 +44,7 @@ from vai.common import (
     output_name_for_pose,
     read_pose_rows,
     save_json,
+    slice_pose_rows,
 )
 from vai.distortion import redistort_and_crop
 from vai.evaluation import evaluate_rendered_scene
@@ -247,7 +249,7 @@ def _run_local_finetune(
     fine_tune_steps: int,
     progress_bar_width: int,
     empty_cache_interval: int,
-) -> float:
+) -> tuple[float, int]:
     """Run exactly `fine_tune_steps` optimizer updates on the selected pool."""
     gaussians.training_setup(context.opt)
     loop_state = build_training_loop_state(context, False, False)
@@ -260,6 +262,7 @@ def _run_local_finetune(
         dynamic_ncols=False,
     )
     active_start = synchronized_timestamp()
+    optimizer_updates = 0
     try:
         for local_step in range(1, int(fine_tune_steps) + 1):
             if (
@@ -285,12 +288,20 @@ def _run_local_finetune(
             render_state = optimization_outputs["render_state"]
             with torch.no_grad():
                 ema_loss = 0.4 * float(loss.item()) + 0.6 * ema_loss
+                will_update = should_run_parameter_update(
+                    context.opt,
+                    local_step,
+                    str(context.method_config["training_method"]),
+                    bool(context.method_config.get("use_mu", False)),
+                )
                 run_3dgs_parameter_update_method(
                     context,
                     gaussians,
                     local_step,
                     render_state["radii"],
                 )
+                if will_update:
+                    optimizer_updates += 1
                 run_3dgs_densification_method(
                     context,
                     gaussians,
@@ -312,7 +323,14 @@ def _run_local_finetune(
             progress_bar.update(1)
     finally:
         progress_bar.close()
-    return max(synchronized_timestamp() - active_start, 0.0)
+    if optimizer_updates != int(fine_tune_steps):
+        raise RuntimeError(
+            "Fine-tune phai co dung {} optimizer update, nhan duoc {}".format(
+                fine_tune_steps,
+                optimizer_updates,
+            )
+        )
+    return max(synchronized_timestamp() - active_start, 0.0), optimizer_updates
 
 
 def run_test_pose_finetuning(
@@ -371,7 +389,14 @@ def run_test_pose_finetuning(
     )
     if configured_pose_path and not pose_path.is_absolute():
         pose_path = source_path / pose_path
-    pose_rows = read_pose_rows(pose_path)
+    all_pose_rows = read_pose_rows(pose_path)
+    pose_start_index = int(runtime_args.pose_start_index)
+    pose_rows = slice_pose_rows(
+        all_pose_rows,
+        start_index=pose_start_index,
+        pose_count=int(runtime_args.pose_count),
+    )
+    pose_end_index = pose_start_index + len(pose_rows)
     # Validate the requested extension before any per-pose GPU training starts.
     output_name_for_pose(
         pose_rows[0]["image_name"],
@@ -443,7 +468,11 @@ def run_test_pose_finetuning(
         "pose_aware_sampling": False,
         "top_k": top_k,
         "sigma_multiplier": sigma_multiplier,
+        "source_test_pose_count": len(all_pose_rows),
+        "pose_start_index": pose_start_index,
+        "pose_end_index_exclusive": pose_end_index,
         "test_pose_count": len(pose_rows),
+        "pose_indices": list(range(pose_start_index, pose_end_index)),
         "render_dir": str(scene_render_path),
         "output_extension": str(runtime_args.output_extension),
         "poses": [],
@@ -453,7 +482,8 @@ def run_test_pose_finetuning(
     camera_template: Scene | None = None
     total_training_seconds = 0.0
     final_iteration = int(base_iteration + fine_tune_steps)
-    for pose_index, row in enumerate(pose_rows):
+    for batch_pose_index, row in enumerate(pose_rows):
+        pose_index = pose_start_index + batch_pose_index
         pose_directory_name = pose_output_directory_name(
             pose_index,
             row["image_name"],
@@ -505,6 +535,7 @@ def run_test_pose_finetuning(
         ]
         selection_payload = {
             "pose_index": pose_index,
+            "batch_pose_index": batch_pose_index,
             "test_image_name": row["image_name"],
             **selection.to_dict(),
         }
@@ -513,7 +544,7 @@ def run_test_pose_finetuning(
             "Pose {}/{} {}: selected {}/{} views, sigma={:.6f}, "
             "score range [{:.6g}, {:.6g}]".format(
                 pose_index + 1,
-                len(pose_rows),
+                len(all_pose_rows),
                 row["image_name"],
                 len(selected_cameras),
                 len(all_train_cameras),
@@ -535,7 +566,7 @@ def run_test_pose_finetuning(
             gaussians,
             train_cameras_override=selected_cameras,
         )
-        training_seconds = _run_local_finetune(
+        training_seconds, optimizer_updates = _run_local_finetune(
             context,
             gaussians,
             selected_cameras,
@@ -574,6 +605,7 @@ def run_test_pose_finetuning(
 
         pose_result = {
             "pose_index": pose_index,
+            "batch_pose_index": batch_pose_index,
             "test_image_name": row["image_name"],
             "model_path": str(pose_model_path),
             "model_saved": save_pose_models,
@@ -589,6 +621,7 @@ def run_test_pose_finetuning(
             ),
             "render_path": str(scene_render_path / render_name),
             "training_seconds": float(training_seconds),
+            "optimizer_updates": int(optimizer_updates),
             "gaussian_count": int(gaussians.get_xyz.shape[0]),
             "selection": selection_payload,
         }

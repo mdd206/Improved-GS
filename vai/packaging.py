@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from vai.common import output_name_for_pose, read_pose_rows
+from vai.common import output_name_for_pose, read_pose_rows, slice_pose_rows
 
 
 def discover_pose_files(
@@ -39,12 +39,18 @@ def validate_submission_scene(
     pose_path: str | Path,
     output_extension: str = "csv",
     allow_extra: bool = False,
+    pose_start_index: int = 0,
+    pose_count: int = -1,
 ) -> list[Path]:
     """Kiem tra ten, so luong va kich thuoc anh cua mot scene."""
     scene_dir = Path(submission_root) / scene_name
     if not scene_dir.is_dir():
         raise FileNotFoundError(f"Thieu thu muc render scene: {scene_dir}")
-    pose_rows = read_pose_rows(pose_path)
+    pose_rows = slice_pose_rows(
+        read_pose_rows(pose_path),
+        start_index=pose_start_index,
+        pose_count=pose_count,
+    )
     expected_paths: list[Path] = []
     expected_names: set[str] = set()
     for row in pose_rows:
@@ -80,6 +86,8 @@ def package_submission(
     subset: list[str] | None = None,
     output_extension: str = "csv",
     allow_extra: bool = False,
+    pose_start_index: int = 0,
+    pose_count: int = -1,
 ) -> dict[str, int]:
     """Validate tat ca scene va chi ghi dung file mong doi vao ZIP."""
     scene_files: dict[str, list[Path]] = {}
@@ -90,6 +98,8 @@ def package_submission(
             pose_path,
             output_extension,
             allow_extra,
+            pose_start_index,
+            pose_count,
         )
 
     zip_path = Path(zip_path)

@@ -86,6 +86,20 @@ class TestPoseViewSelectionTests(unittest.TestCase):
         self.assertGreater(selection.views[0].score, 0.0)
         self.assertEqual(selection.views[1].score, 0.0)
 
+    def test_direction_similarity_is_squared_cosine(self) -> None:
+        cameras = [
+            make_camera(0, (0.0, 0.0, 0.0), (np.sqrt(3.0) / 2.0, 0.0, 0.5)),
+            make_camera(1, (2.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+        ]
+        test_pose = CameraPose(
+            center=np.array([0.0, 0.0, 0.0]),
+            forward=np.array([0.0, 0.0, 1.0]),
+        )
+        selection = select_top_training_views(cameras, test_pose, top_k=2)
+        first_view = next(view for view in selection.views if view.train_index == 0)
+        self.assertAlmostEqual(first_view.cosine, 0.5)
+        self.assertAlmostEqual(first_view.score, 0.25)
+
     def test_top_25_is_stable_and_contains_no_unselected_camera(self) -> None:
         cameras = [
             make_camera(index, (float(index), 0.0, 0.0))
@@ -127,6 +141,8 @@ class TestPoseViewSelectionTests(unittest.TestCase):
         self.assertFalse(local.pose_aware_sampling)
         self.assertEqual(local.iterations, 3001)
         self.assertEqual(local.position_lr_max_steps, 3000)
+        self.assertEqual(local.mu_start_iter, 3001)
+        self.assertEqual(local.mu_second_start_iter, 3002)
         self.assertEqual(local.densify_from_iter, 0)
         self.assertEqual(local.densify_until_iter, 1501)
         self.assertEqual(local.budget_warmup_until_offset, 1501)
@@ -144,6 +160,8 @@ class TestPoseFineTuneCliTests(unittest.TestCase):
             text=True,
         )
         self.assertIn("--base_model_path", completed.stdout)
+        self.assertIn("--pose_start_index", completed.stdout)
+        self.assertIn("--pose_count", completed.stdout)
         self.assertIn("--fine_tune_steps", completed.stdout)
         self.assertIn("--split_until_step", completed.stdout)
         self.assertIn("--top_k", completed.stdout)
@@ -167,10 +185,26 @@ class TestPoseFineTuneCliTests(unittest.TestCase):
         self.assertIn("TOP_K = 25", source)
         self.assertIn("SIGMA_MULTIPLIER = 3.0", source)
         self.assertIn("SAVE_POSE_MODELS = False", source)
+        self.assertIn("POSE_BATCH_INDEX = 0", source)
+        self.assertIn("POSE_BATCH_SIZE = 15", source)
+        self.assertIn("POSE_START_INDEX = POSE_BATCH_INDEX * POSE_BATCH_SIZE", source)
+        self.assertIn("'--pose_start_index', str(POSE_START_INDEX)", source)
+        self.assertIn("'--pose_count', str(POSE_COUNT)", source)
         self.assertIn("'--coarse_to_fine', 'false'", source)
         self.assertIn("'--pose_aware_sampling', 'false'", source)
         self.assertIn("'--training_method', 'improvedgs'", source)
+        self.assertIn("REPO_BRANCH = 'agent/test-pose-finetune'", source)
+        self.assertIn("'git', 'clone', '--recursive', '--branch', REPO_BRANCH", source)
+        self.assertIn("WORK_ROOT / 'vai_cleaned' / SET_NAME", source)
+        self.assertIn("'--overwrite'", source)
+        self.assertIn("'--no-install-recommends', 'colmap'", source)
+        self.assertGreaterEqual(source.count("'vai_package.py'"), 2)
+        self.assertNotIn("'--native_simple_radial'", source)
+        self.assertNotIn("vai_native_simple_radial", source)
         self.assertNotIn("hfgs", source.lower())
+        for cell in notebook["cells"]:
+            if cell.get("cell_type") == "code":
+                compile("".join(cell.get("source", [])), str(notebook_path), "exec")
 
 
 if __name__ == "__main__":

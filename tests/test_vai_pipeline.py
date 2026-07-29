@@ -25,7 +25,7 @@ from vai.colmap_io import (
     write_extrinsics_binary,
     write_intrinsics_binary,
 )
-from vai.common import output_name_for_pose, read_pose_rows
+from vai.common import output_name_for_pose, read_pose_rows, slice_pose_rows
 from vai.distortion import redistort_and_crop, redistort_image
 from vai.evaluation import compute_weighted_score
 from vai.image_processing import save_render_image, sharpen_image
@@ -97,6 +97,22 @@ class VaiCommonTests(unittest.TestCase):
         score, normalized = compute_weighted_score(0.8, 30.0, 0.2, 40.0)
         self.assertAlmostEqual(normalized, 0.75)
         self.assertAlmostEqual(score, 0.785)
+
+    def test_pose_slice_is_sequential_and_never_random(self) -> None:
+        rows = [{"image_name": "pose_{:02d}.JPG".format(index)} for index in range(40)]
+        selected = slice_pose_rows(rows, start_index=15, pose_count=15)
+        self.assertEqual(
+            [row["image_name"] for row in selected],
+            ["pose_{:02d}.JPG".format(index) for index in range(15, 30)],
+        )
+        self.assertEqual(
+            slice_pose_rows(rows, start_index=30, pose_count=15),
+            rows[30:40],
+        )
+        with self.assertRaises(ValueError):
+            slice_pose_rows(rows, start_index=40, pose_count=15)
+        with self.assertRaises(ValueError):
+            slice_pose_rows(rows, start_index=0, pose_count=0)
 
 
 class CoarseToFineScheduleTests(unittest.TestCase):
@@ -588,6 +604,63 @@ class PackagingTests(unittest.TestCase):
                 self.assertEqual(archive.namelist(), ["HCM0204/sample.JPG"])
             with zipfile.ZipFile(png_zip) as archive:
                 self.assertEqual(archive.namelist(), ["HCM0204/sample.png"])
+
+    def test_sequential_pose_batch_packages_only_requested_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            phase_dir = root / "phase1"
+            pose_dir = phase_dir / "public_set" / "HCM0204" / "test"
+            pose_dir.mkdir(parents=True)
+            pose_path = pose_dir / "test_poses.csv"
+            with open(pose_path, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=POSE_COLUMNS)
+                writer.writeheader()
+                for index in range(20):
+                    writer.writerow(
+                        {
+                            "image_name": "pose_{:02d}.JPG".format(index),
+                            "qw": "1",
+                            "qx": "0",
+                            "qy": "0",
+                            "qz": "0",
+                            "tx": "0",
+                            "ty": "0",
+                            "tz": "0",
+                            "fx": "10",
+                            "fy": "10",
+                            "cx": "2",
+                            "cy": "1.5",
+                            "width": "4",
+                            "height": "3",
+                        }
+                    )
+
+            render_dir = root / "renders" / "HCM0204"
+            render_dir.mkdir(parents=True)
+            image = PilImage.new("RGB", (4, 3), (10, 20, 30))
+            for index in range(15, 20):
+                image.save(render_dir / "pose_{:02d}.JPG".format(index))
+
+            zip_path = root / "batch.zip"
+            counts = package_submission(
+                phase_dir=phase_dir,
+                set_name="public_set",
+                submission_root=root / "renders",
+                zip_path=zip_path,
+                subset=["HCM0204"],
+                output_extension="csv",
+                pose_start_index=15,
+                pose_count=5,
+            )
+            self.assertEqual(counts, {"HCM0204": 5})
+            with zipfile.ZipFile(zip_path) as archive:
+                self.assertEqual(
+                    archive.namelist(),
+                    [
+                        "HCM0204/pose_{:02d}.JPG".format(index)
+                        for index in range(15, 20)
+                    ],
+                )
 
 
 if __name__ == "__main__":

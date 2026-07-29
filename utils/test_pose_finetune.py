@@ -105,6 +105,9 @@ def configure_local_improvedgs_options(
     # sentinel therefore produces exactly `fine_tune_steps` optimizer updates.
     local_opt.iterations = int(fine_tune_steps) + 1
     local_opt.position_lr_max_steps = int(fine_tune_steps)
+    # Dam bao 3.000 local step deu la optimizer update; MU chi bat dau sau stage nay.
+    local_opt.mu_start_iter = int(fine_tune_steps) + 1
+    local_opt.mu_second_start_iter = int(fine_tune_steps) + 2
     # Densification uses strict bounds: from < step < until.
     local_opt.densify_from_iter = max(int(split_from_step) - 1, 0)
     local_opt.densify_until_iter = int(split_until_step) + 1

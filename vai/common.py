@@ -46,6 +46,32 @@ def read_pose_rows(csv_path: str | Path) -> list[dict[str, str]]:
     return rows
 
 
+def slice_pose_rows(
+    pose_rows: list[dict[str, str]],
+    start_index: int = 0,
+    pose_count: int = -1,
+) -> list[dict[str, str]]:
+    """Lay mot doan pose lien tiep, giu nguyen thu tu trong CSV."""
+    start_index = int(start_index)
+    pose_count = int(pose_count)
+    if start_index < 0:
+        raise ValueError("pose_start_index phai khong am")
+    if pose_count == 0 or pose_count < -1:
+        raise ValueError("pose_count phai la -1 hoac so nguyen duong")
+    if start_index >= len(pose_rows):
+        raise ValueError(
+            "pose_start_index={} nam ngoai {} pose".format(
+                start_index,
+                len(pose_rows),
+            )
+        )
+    end_index = len(pose_rows) if pose_count == -1 else start_index + pose_count
+    selected_rows = pose_rows[start_index:min(end_index, len(pose_rows))]
+    if not selected_rows:
+        raise ValueError("Khong co test pose nao trong khoang da chon")
+    return selected_rows
+
+
 def normalize_output_extension(value: str) -> str:
     """Chuan hoa lua chon duoi anh thanh '.png' hoac 'csv'."""
     normalized = str(value).strip().lower()

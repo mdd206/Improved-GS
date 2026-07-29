@@ -190,7 +190,12 @@ cell nay ma khong can sua file Python hay JSON trong repository.
 
 Notebook
 [notebooks/vai_test_pose_finetune.ipynb](notebooks/vai_test_pose_finetune.ipynb)
-dung model ImprovedGS 30k co san va thuc hien test-time fine-tuning doc lap:
+dung pipeline ImprovedGS thuan tren `main`: preprocess camera SIMPLE_RADIAL sang
+PINHOLE RGBA, load model ImprovedGS 30k co san, fine-tune, render PINHOLE, roi
+redistort ve anh nop bai. Thi nghiem nay khong dung D3/native SIMPLE_RADIAL,
+coarse-to-fine hay pose-aware sampling.
+
+Fine-tuning duoc thuc hien doc lap nhu sau:
 
 1. Moi test pose tao mot Gaussian model moi tu PLY `iteration_30000`. Model cua
    pose truoc khong duoc dung lam khoi tao cho pose sau.
@@ -203,14 +208,22 @@ dung model ImprovedGS 30k co san va thuc hien test-time fine-tuning doc lap:
 7. Render test pose tuong ung, sau do giai phong model truoc khi load lai PLY
    30k. Mac dinh khong ghi PLY tung pose de tranh het dia Kaggle.
 
+Notebook mac dinh chay dung 15 pose dau tien trong thu tu CSV, khong random:
+`POSE_BATCH_INDEX = 0` va `POSE_BATCH_SIZE = 15`. Cac lan sau chi can doi
+`POSE_BATCH_INDEX` trong notebook: `1` chay pose 15-29, `2` chay pose 30-44,
+v.v. CLI va lenh package cung nhan `--pose_start_index` va `--pose_count`, nen
+khong can sua code Python de chay cac khoang pose tiep theo.
+
 CLI tuong ung:
 
 ```bash
 python vai_test_pose_finetune.py \
-  --source_path /kaggle/working/vai_native_simple_radial/public_set/HCM0204 \
+  --source_path /kaggle/working/vai_cleaned/public_set/HCM0204 \
   --base_model_path /kaggle/input/SLUG/models/vai_models/HCM0204 \
   --base_iteration 30000 \
   --model_path /kaggle/working/vai_test_pose_models/public_set/HCM0204 \
+  --pose_start_index 0 \
+  --pose_count 15 \
   --fine_tune_steps 3000 \
   --split_from_step 0 \
   --split_until_step 1500 \
