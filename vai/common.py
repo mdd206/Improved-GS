@@ -115,6 +115,32 @@ def load_vai_metadata(scene_path: str | Path) -> dict[str, Any]:
     return payload
 
 
+def output_camera_from_metadata(
+    metadata: dict[str, Any],
+) -> dict[str, float | int]:
+    """Doc camera output goc va quy pinhole ve radial_k bang 0."""
+    camera = metadata.get("original_camera", {})
+    params = camera.get("params", [])
+    camera_model = camera.get("model")
+    if camera_model == "SIMPLE_RADIAL" and len(params) == 4:
+        focal, cx, cy, radial_k = [float(value) for value in params]
+    elif camera_model == "SIMPLE_PINHOLE" and len(params) == 3:
+        focal, cx, cy = [float(value) for value in params]
+        radial_k = 0.0
+    else:
+        raise ValueError(
+            "VAI metadata khong chua camera SIMPLE_RADIAL/SIMPLE_PINHOLE hop le"
+        )
+    return {
+        "focal": focal,
+        "cx": cx,
+        "cy": cy,
+        "radial_k": radial_k,
+        "width": int(camera["width"]),
+        "height": int(camera["height"]),
+    }
+
+
 def camera_to_dict(camera: Any) -> dict[str, Any]:
     """Chuyen camera COLMAP thanh JSON metadata gon nhe."""
     return {

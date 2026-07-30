@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 import unittest
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
@@ -213,6 +215,126 @@ class TestPoseFineTuneCliTests(unittest.TestCase):
         for cell in notebook["cells"]:
             if cell.get("cell_type") == "code":
                 compile("".join(cell.get("source", [])), str(notebook_path), "exec")
+
+    def test_private_phase2_notebook_runs_all_poses_and_packages_png(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        notebook_path = (
+            repository_root
+            / "notebooks"
+            / "vai_private_phase2_pose_finetune.ipynb"
+        )
+        with open(notebook_path, encoding="utf-8") as handle:
+            notebook = json.load(handle)
+        source = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+        )
+        self.assertIn("SCENE_NAMES = ['HCM0421']", source)
+        for scene_name in (
+            "bonsai",
+            "chair",
+            "HCM0421",
+            "HCM0539",
+            "HCM0540",
+            "HCM0644",
+            "HCM0674",
+        ):
+            self.assertIn(repr(scene_name), source)
+        self.assertIn("BASE_MODEL_OVERRIDES = {", source)
+        self.assertIn("BUDGET_OVERRIDES = {", source)
+        self.assertIn("for scene_name in SELECTED_SCENES", source)
+        self.assertGreaterEqual(source.count("'--pose_count', '-1'"), 2)
+        self.assertIn("'--output_extension', 'png'", source)
+        self.assertIn("'--save_png', 'false'", source)
+        self.assertIn("'--evaluate', 'false'", source)
+        self.assertIn("'--coarse_to_fine', 'false'", source)
+        self.assertIn("'--pose_aware_sampling', 'false'", source)
+        self.assertIn("'--subset', *SELECTED_SCENES", source)
+        self.assertIn("PHASE2_DIR.parent", source)
+        self.assertIn("assert all(name.endswith('.png')", source)
+        self.assertIn("SIMPLE_RADIAL", source)
+        self.assertIn("SIMPLE_PINHOLE", source)
+        self.assertNotIn("POSE_BATCH_INDEX", source)
+        for cell in notebook["cells"]:
+            if cell.get("cell_type") == "code":
+                compile("".join(cell.get("source", [])), str(notebook_path), "exec")
+
+    def test_private_phase2_parameter_cell_discovers_data_and_scene_selection(
+        self,
+    ) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        notebook_path = (
+            repository_root
+            / "notebooks"
+            / "vai_private_phase2_pose_finetune.ipynb"
+        )
+        with open(notebook_path, encoding="utf-8") as handle:
+            notebook = json.load(handle)
+        parameter_cells = [
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if "SCENE_NAMES = ['HCM0421']" in "".join(cell.get("source", []))
+        ]
+        self.assertEqual(len(parameter_cells), 1)
+
+        scene_names = (
+            "bonsai",
+            "chair",
+            "HCM0421",
+            "HCM0539",
+            "HCM0540",
+            "HCM0644",
+            "HCM0674",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            kaggle_input = root / "input"
+            kaggle_working = root / "working"
+            phase2_root = kaggle_input / "dataset" / "phase2"
+            for scene_name in scene_names:
+                (phase2_root / scene_name / "train" / "images").mkdir(
+                    parents=True
+                )
+                camera_path = (
+                    phase2_root
+                    / scene_name
+                    / "train"
+                    / "sparse"
+                    / "0"
+                    / "cameras.bin"
+                )
+                camera_path.parent.mkdir(parents=True)
+                camera_path.touch()
+                pose_path = (
+                    phase2_root / scene_name / "test" / "test_poses.csv"
+                )
+                pose_path.parent.mkdir(parents=True)
+                pose_path.touch()
+
+            parameter_source = parameter_cells[0].replace(
+                "WORK_ROOT = Path('/kaggle/working')",
+                "WORK_ROOT = Path({})".format(repr(str(kaggle_working))),
+            ).replace(
+                "Path('/kaggle/input')",
+                "Path({})".format(repr(str(kaggle_input))),
+            )
+            namespace: dict[str, object] = {}
+            with patch("builtins.print"):
+                exec(parameter_source, namespace)
+            self.assertEqual(namespace["PHASE2_DIR"], phase2_root)
+            self.assertEqual(namespace["SELECTED_SCENES"], ["HCM0421"])
+
+            all_source = parameter_source.replace(
+                "SCENE_NAMES = ['HCM0421']",
+                "SCENE_NAMES = []",
+            )
+            all_namespace: dict[str, object] = {}
+            with patch("builtins.print"):
+                exec(all_source, all_namespace)
+            self.assertEqual(
+                all_namespace["SELECTED_SCENES"],
+                sorted(scene_names),
+            )
 
 
 if __name__ == "__main__":

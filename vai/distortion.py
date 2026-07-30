@@ -68,6 +68,17 @@ def redistort_and_crop(
     interpolation: str = "bicubic",
 ) -> torch.Tensor:
     """Redistort canvas mo rong va crop ve dung khung anh trong CSV."""
+    _, image_height, image_width = image.shape
+    is_identity = (
+        abs(float(radial_k)) <= 1e-12
+        and abs(float(render_cx) - float(target_cx)) <= 1e-6
+        and abs(float(render_cy) - float(target_cy)) <= 1e-6
+        and image_width == int(target_width)
+        and image_height == int(target_height)
+    )
+    if is_identity:
+        return image
+
     distorted = redistort_image(
         image,
         focal,

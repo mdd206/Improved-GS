@@ -25,7 +25,12 @@ from vai.colmap_io import (
     write_extrinsics_binary,
     write_intrinsics_binary,
 )
-from vai.common import output_name_for_pose, read_pose_rows, slice_pose_rows
+from vai.common import (
+    output_camera_from_metadata,
+    output_name_for_pose,
+    read_pose_rows,
+    slice_pose_rows,
+)
 from vai.distortion import redistort_and_crop, redistort_image
 from vai.evaluation import compute_weighted_score
 from vai.image_processing import save_render_image, sharpen_image
@@ -113,6 +118,43 @@ class VaiCommonTests(unittest.TestCase):
             slice_pose_rows(rows, start_index=40, pose_count=15)
         with self.assertRaises(ValueError):
             slice_pose_rows(rows, start_index=0, pose_count=0)
+
+    def test_output_camera_supports_radial_and_identity_pinhole(self) -> None:
+        radial = output_camera_from_metadata(
+            {
+                "original_camera": {
+                    "model": "SIMPLE_RADIAL",
+                    "width": 1320,
+                    "height": 989,
+                    "params": [925.0, 660.0, 494.5, 0.009],
+                }
+            }
+        )
+        pinhole = output_camera_from_metadata(
+            {
+                "original_camera": {
+                    "model": "SIMPLE_PINHOLE",
+                    "width": 1920,
+                    "height": 1080,
+                    "params": [1650.0, 960.0, 540.0],
+                }
+            }
+        )
+        self.assertAlmostEqual(float(radial["radial_k"]), 0.009)
+        self.assertEqual(int(radial["width"]), 1320)
+        self.assertEqual(float(pinhole["focal"]), 1650.0)
+        self.assertEqual(float(pinhole["radial_k"]), 0.0)
+        with self.assertRaises(ValueError):
+            output_camera_from_metadata(
+                {
+                    "original_camera": {
+                        "model": "OPENCV",
+                        "width": 4,
+                        "height": 3,
+                        "params": [],
+                    }
+                }
+            )
 
 
 class CoarseToFineScheduleTests(unittest.TestCase):
@@ -342,12 +384,104 @@ class PreprocessingTests(unittest.TestCase):
             self.assertEqual(metadata["original_camera"]["model"], "SIMPLE_RADIAL")
             self.assertEqual(metadata["undistorted_camera"]["model"], "PINHOLE")
 
+    def test_simple_pinhole_scene_skips_colmap_and_keeps_rgb_images(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_scene = root / "raw" / "bonsai"
+            source_images = source_scene / "train" / "images"
+            source_sparse = source_scene / "train" / "sparse" / "0"
+            test_dir = source_scene / "test"
+            source_images.mkdir(parents=True)
+            source_sparse.mkdir(parents=True)
+            test_dir.mkdir(parents=True)
+            PilImage.new("RGB", (4, 3), (10, 20, 30)).save(
+                source_images / "train.jpg"
+            )
+            write_intrinsics_binary(
+                {
+                    1: Camera(
+                        id=1,
+                        model="SIMPLE_PINHOLE",
+                        width=4,
+                        height=3,
+                        params=np.array([10.0, 2.0, 1.5]),
+                    )
+                },
+                source_sparse / "cameras.bin",
+            )
+            write_extrinsics_binary(
+                {
+                    1: make_colmap_image(1, "train.jpg"),
+                    2: make_colmap_image(2, "missing.jpg"),
+                },
+                source_sparse / "images.bin",
+            )
+            (source_sparse / "points3D.bin").write_bytes(b"\x00" * 8)
+            with open(
+                test_dir / "test_poses.csv",
+                "w",
+                newline="",
+                encoding="utf-8",
+            ) as handle:
+                writer = csv.DictWriter(handle, fieldnames=POSE_COLUMNS)
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "image_name": "test.jpg",
+                        "qw": "1",
+                        "qx": "0",
+                        "qy": "0",
+                        "qz": "0",
+                        "tx": "0",
+                        "ty": "0",
+                        "tz": "0",
+                        "fx": "10",
+                        "fy": "10",
+                        "cx": "2",
+                        "cy": "1.5",
+                        "width": "4",
+                        "height": "3",
+                    }
+                )
+
+            output_root = root / "cleaned"
+            with patch("vai.preprocessing._check_colmap_executable") as check_mock:
+                result = preprocess_scene(source_scene, output_root)
+
+            output_scene = output_root / "bonsai"
+            check_mock.assert_not_called()
+            self.assertEqual(result["train_images"], 1)
+            self.assertEqual(result["registered_images"], 1)
+            with PilImage.open(output_scene / "images" / "train.jpg") as image:
+                self.assertEqual(image.mode, "RGB")
+            with open(output_scene / "vai_metadata.json", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            self.assertEqual(metadata["original_camera"]["model"], "SIMPLE_PINHOLE")
+            self.assertEqual(metadata["undistorted_camera"]["model"], "SIMPLE_PINHOLE")
+            self.assertFalse(metadata["undistort"]["enabled"])
+            self.assertFalse(metadata["alpha_mask_required"])
+
 
 class DistortionTests(unittest.TestCase):
     def test_zero_distortion_is_identity(self) -> None:
         image = torch.rand((3, 5, 7), dtype=torch.float32)
         output = redistort_image(image, focal=20.0, cx=3.0, cy=2.0, radial_k=0.0)
         torch.testing.assert_close(output, image, atol=1e-6, rtol=1e-6)
+
+    def test_matching_pinhole_canvas_skips_warp_and_crop(self) -> None:
+        image = torch.rand((3, 5, 7), dtype=torch.float32)
+        output = redistort_and_crop(
+            image,
+            focal=20.0,
+            render_cx=3.0,
+            render_cy=2.0,
+            radial_k=0.0,
+            target_cx=3.0,
+            target_cy=2.0,
+            target_width=7,
+            target_height=5,
+        )
+        self.assertIs(output, image)
 
     def test_crop_uses_principal_point_offset(self) -> None:
         image = torch.arange(3 * 8 * 10, dtype=torch.float32).reshape(3, 8, 10)

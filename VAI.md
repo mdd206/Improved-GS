@@ -1,6 +1,6 @@
 # Pipeline VAI cho ImprovedGS
 
-Tai lieu nay mo ta luong xu ly du lieu Viettel AI Race (VAI) da duoc tich hop vao ImprovedGS. Pipeline giu nguyen pose COLMAP, xu ly camera `SIMPLE_RADIAL`, render dung `test_poses.csv`, danh gia public ground truth va tao ZIP submission.
+Tai lieu nay mo ta luong xu ly du lieu Viettel AI Race (VAI) da duoc tich hop vao ImprovedGS. Pipeline giu nguyen pose COLMAP, xu ly camera `SIMPLE_RADIAL` hoac `SIMPLE_PINHOLE`, render dung `test_poses.csv`, danh gia public ground truth va tao ZIP submission.
 
 ## 1. Luong xu ly
 
@@ -254,3 +254,28 @@ hon model. Moi thu muc pose co `view_selection.json`; file nay ghi `sigma`, scor
 khoang cach, cosine va thu tu top-25 de audit. Manifest tong nam tai
 `test_pose_finetune_manifest.json`. Neu can giu model 33k cua tung pose, dat
 `--save_pose_models true`; can du tru dung luong rat lon cho moi PLY.
+
+## 8. Private phase 2: fine-tune toan bo pose va package PNG
+
+Notebook
+[notebooks/vai_private_phase2_pose_finetune.ipynb](notebooks/vai_private_phase2_pose_finetune.ipynb)
+ho tro 7 scene private phase 2: `bonsai`, `chair`, `HCM0421`, `HCM0539`,
+`HCM0540`, `HCM0644`, `HCM0674`. `bonsai` va `chair` dung SIMPLE_PINHOLE nen
+duoc giu nguyen RGB; nam scene HCM dung SIMPLE_RADIAL nen van duoc undistort
+sang PINHOLE RGBA va redistort khi render.
+
+Chi can sua cell `parameters`:
+
+```python
+SCENE_NAMES = ["HCM0421"]                  # mot scene
+SCENE_NAMES = ["HCM0421", "HCM0539"]      # nhieu scene
+SCENE_NAMES = []                            # tat ca scene
+BASE_MODEL_OVERRIDES = {}                   # dat khi mot scene co nhieu model 30k
+BUDGET_OVERRIDES = {"HCM0421": 5_500_000}  # tuy chon
+```
+
+Moi scene tu tim model `iteration_30000`, chay doc lap tat ca test pose voi
+`pose_count=-1`, render truc tiep PNG, bo qua evaluation vi private khong co
+ground truth, roi validate ten/kich thuoc va tao mot ZIP co cau truc
+`scene/image.png`. Fine-tune van load lai PLY 30k cho tung pose, chi dung top-25,
+tat C2F/pose-aware trong local stage va khong luu PLY 33k mac dinh.

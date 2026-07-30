@@ -1,6 +1,7 @@
 """Tien xu ly scene VAI thanh layout COLMAP ma ImprovedGS doc truc tiep."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -218,6 +219,8 @@ def validate_processed_scene(scene_path: str | Path) -> dict[str, Any]:
         if not required_path.exists():
             raise FileNotFoundError(f"Scene preprocess thieu: {required_path}")
 
+    with open(metadata_path, encoding="utf-8") as handle:
+        metadata = json.load(handle)
     camera = _single_camera(sparse_dir)
     if camera.model not in {"PINHOLE", "SIMPLE_PINHOLE"}:
         raise ValueError(f"Camera sau preprocess phai la PINHOLE, nhan duoc {camera.model}")
@@ -232,13 +235,19 @@ def validate_processed_scene(scene_path: str | Path) -> dict[str, Any]:
                 len(registered_names), len(disk_names)
             )
         )
-    non_rgba = []
-    for image_path in files_by_stem.values():
-        with Image.open(image_path) as image:
-            if image.mode != "RGBA":
-                non_rgba.append(image_path.name)
-    if non_rgba:
-        raise ValueError(f"Anh train chua co alpha mask: {non_rgba[:5]}")
+    alpha_mask_required = metadata.get("alpha_mask_required")
+    if alpha_mask_required is None:
+        alpha_mask_required = (
+            metadata.get("original_camera", {}).get("model") == "SIMPLE_RADIAL"
+        )
+    if bool(alpha_mask_required):
+        non_rgba = []
+        for image_path in files_by_stem.values():
+            with Image.open(image_path) as image:
+                if image.mode != "RGBA":
+                    non_rgba.append(image_path.name)
+        if non_rgba:
+            raise ValueError(f"Anh train chua co alpha mask: {non_rgba[:5]}")
 
     pose_count = len(read_pose_rows(pose_csv))
     return {
@@ -268,11 +277,10 @@ def preprocess_scene(
     max_scale: float = 2.0,
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    """Chuyen mot scene raw VAI thanh scene ImprovedGS co metadata distortion."""
+    """Chuyen scene raw thanh layout ImprovedGS cho camera radial hoac pinhole."""
     source_scene = Path(source_scene)
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
-    _check_colmap_executable(colmap_executable)
 
     scene_name = source_scene.name
     output_scene = output_root / scene_name
@@ -285,18 +293,31 @@ def preprocess_scene(
     try:
         _copy_raw_scene(source_scene, work_scene)
         original_camera = _single_camera(work_scene / "sparse" / "0")
-        if original_camera.model != "SIMPLE_RADIAL":
+        if original_camera.model == "SIMPLE_RADIAL":
+            _check_colmap_executable(colmap_executable)
+            embedded_count, registered_count = _replace_with_undistorted_scene(
+                work_scene,
+                colmap_executable,
+                blank_pixels,
+                min_scale,
+                max_scale,
+            )
+            alpha_mask_required = True
+            undistort_enabled = True
+        elif original_camera.model == "SIMPLE_PINHOLE":
+            embedded_count = len(_files_by_stem(work_scene / "images"))
+            registered_count = _synchronize_and_filter_images(
+                work_scene / "sparse" / "0",
+                work_scene / "images",
+            )
+            alpha_mask_required = False
+            undistort_enabled = False
+        else:
             raise ValueError(
-                f"Camera raw VAI phai la SIMPLE_RADIAL, nhan duoc {original_camera.model}"
+                "Camera raw phai la SIMPLE_RADIAL hoac SIMPLE_PINHOLE, "
+                f"nhan duoc {original_camera.model}"
             )
 
-        embedded_count, registered_count = _replace_with_undistorted_scene(
-            work_scene,
-            colmap_executable,
-            blank_pixels,
-            min_scale,
-            max_scale,
-        )
         undistorted_camera = _single_camera(work_scene / "sparse" / "0")
         pose_count = len(read_pose_rows(work_scene / "test" / "test_poses.csv"))
         metadata = {
@@ -309,7 +330,9 @@ def preprocess_scene(
             "test_pose_count": pose_count,
             "test_poses": "test/test_poses.csv",
             "test_images": "test/images",
+            "alpha_mask_required": alpha_mask_required,
             "undistort": {
+                "enabled": undistort_enabled,
                 "blank_pixels": float(blank_pixels),
                 "min_scale": float(min_scale),
                 "max_scale": float(max_scale),

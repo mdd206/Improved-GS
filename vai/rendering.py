@@ -17,6 +17,7 @@ from scene.gaussian_model import GaussianModel as GaussianModel3DGS
 from utils.graphics_utils import focal2fov, getProjectionMatrix, getWorld2View2
 from vai.common import (
     load_vai_metadata,
+    output_camera_from_metadata,
     output_name_for_pose,
     read_pose_rows,
     save_json,
@@ -53,19 +54,8 @@ def _single_undistorted_camera(source_path: Path) -> Any:
 
 
 def _original_radial_camera(metadata: dict[str, Any]) -> dict[str, float | int]:
-    """Lay intrinsics va he so k tu camera SIMPLE_RADIAL goc."""
-    camera = metadata.get("original_camera", {})
-    params = camera.get("params", [])
-    if camera.get("model") != "SIMPLE_RADIAL" or len(params) != 4:
-        raise ValueError("VAI metadata khong chua camera SIMPLE_RADIAL hop le")
-    return {
-        "focal": float(params[0]),
-        "cx": float(params[1]),
-        "cy": float(params[2]),
-        "radial_k": float(params[3]),
-        "width": int(camera["width"]),
-        "height": int(camera["height"]),
-    }
+    """Lay camera output goc; pinhole dung radial_k=0 de giu anh nguyen dang."""
+    return output_camera_from_metadata(metadata)
 
 
 def _validate_pose_intrinsics(
