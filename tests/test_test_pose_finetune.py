@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+from PIL import Image as PilImage
 
 from utils.pose_aware_sampling import CameraPose
 from utils.test_pose_finetune import (
@@ -19,6 +20,12 @@ from utils.test_pose_finetune import (
     pose_output_directory_name,
     select_top_training_views,
     validate_finetune_schedule,
+)
+from vai.finetune_progress import (
+    build_progress_payload,
+    save_progress,
+    valid_completed_pose_result,
+    validate_resume_manifest,
 )
 
 
@@ -169,6 +176,7 @@ class TestPoseFineTuneCliTests(unittest.TestCase):
         self.assertIn("--top_k", completed.stdout)
         self.assertIn("--sigma_multiplier", completed.stdout)
         self.assertIn("--save_pose_models", completed.stdout)
+        self.assertIn("--resume", completed.stdout)
 
     def test_kaggle_notebook_pins_the_requested_experiment(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -246,6 +254,16 @@ class TestPoseFineTuneCliTests(unittest.TestCase):
         self.assertGreaterEqual(source.count("'--pose_count', '-1'"), 2)
         self.assertIn("'--output_extension', 'png'", source)
         self.assertIn("'--save_png', 'false'", source)
+        self.assertIn("RESUME_COMPLETED_POSES = True", source)
+        self.assertIn(
+            "'--resume', str(RESUME_COMPLETED_POSES).lower()",
+            source,
+        )
+        self.assertIn(
+            "PNG_ROOT / f'{scene_name}_finetune_progress.json'",
+            source,
+        )
+        self.assertIn("progress['completed_pose_count']", source)
         self.assertIn("'--evaluate', 'false'", source)
         self.assertIn("'--coarse_to_fine', 'false'", source)
         self.assertIn("'--pose_aware_sampling', 'false'", source)
@@ -334,6 +352,121 @@ class TestPoseFineTuneCliTests(unittest.TestCase):
             self.assertEqual(
                 all_namespace["SELECTED_SCENES"],
                 sorted(scene_names),
+            )
+
+
+class FineTuneProgressTests(unittest.TestCase):
+    @staticmethod
+    def make_manifest() -> dict[str, object]:
+        return {
+            "scene_name": "HCM0421",
+            "source_path": "/data/HCM0421",
+            "base_model_path": "/models/HCM0421",
+            "base_iteration": 30_000,
+            "fine_tune_steps": 3_000,
+            "split_from_step": 0,
+            "split_until_step": 1_500,
+            "top_k": 25,
+            "sigma_multiplier": 3.0,
+            "pose_start_index": 0,
+            "pose_end_index_exclusive": 2,
+            "output_extension": "png",
+            "render_dir": "/renders/HCM0421",
+            "test_pose_count": 2,
+            "source_test_pose_count": 60,
+            "poses": [
+                {
+                    "pose_index": 0,
+                    "test_image_name": "pose_00.JPG",
+                    "render_path": "/renders/HCM0421/pose_00.png",
+                    "training_seconds": 12.5,
+                }
+            ],
+        }
+
+    def test_progress_payload_lists_completed_and_current_pose(self) -> None:
+        manifest = self.make_manifest()
+        current_pose = {
+            "pose_index": 1,
+            "test_image_name": "pose_01.JPG",
+            "stage": "fine_tuning",
+        }
+        progress = build_progress_payload(manifest, "running", current_pose)
+        self.assertEqual(progress["status"], "running")
+        self.assertEqual(progress["completed_pose_count"], 1)
+        self.assertEqual(progress["completed_pose_indices"], [0])
+        self.assertEqual(progress["completed_images"], ["pose_00.JPG"])
+        self.assertEqual(progress["current_pose"], current_pose)
+        self.assertIn("updated_at_utc", progress)
+
+    def test_progress_is_written_to_model_and_png_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            paths = [
+                root / "model" / "finetune_progress.json",
+                root / "png" / "HCM0421_finetune_progress.json",
+            ]
+            save_progress(paths, self.make_manifest(), "running")
+            for path in paths:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(payload["completed_pose_count"], 1)
+                self.assertEqual(payload["scene_name"], "HCM0421")
+            self.assertFalse(any(root.rglob("*.tmp")))
+
+    def test_resume_rejects_changed_finetune_configuration(self) -> None:
+        previous = self.make_manifest()
+        current = dict(previous)
+        current["fine_tune_steps"] = 2_000
+        with self.assertRaisesRegex(ValueError, "fine_tune_steps"):
+            validate_resume_manifest(previous, current)
+
+    def test_resume_accepts_only_complete_manifest_and_valid_png(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            render_path = Path(temp_dir) / "pose_00.png"
+            PilImage.new("RGB", (8, 6), (10, 20, 30)).save(render_path)
+            row = {
+                "image_name": "pose_00.JPG",
+                "width": "8",
+                "height": "6",
+            }
+            result = {
+                "pose_index": 0,
+                "test_image_name": "pose_00.JPG",
+                "optimizer_updates": 3_000,
+                "point_cloud_path": "",
+            }
+            self.assertTrue(
+                valid_completed_pose_result(
+                    result,
+                    row,
+                    pose_index=0,
+                    render_path=render_path,
+                    fine_tune_steps=3_000,
+                    save_pose_models=False,
+                )
+            )
+            result["optimizer_updates"] = 2_999
+            self.assertFalse(
+                valid_completed_pose_result(
+                    result,
+                    row,
+                    pose_index=0,
+                    render_path=render_path,
+                    fine_tune_steps=3_000,
+                    save_pose_models=False,
+                )
+            )
+            result["optimizer_updates"] = 3_000
+            render_path.write_bytes(b"truncated PNG")
+            self.assertFalse(
+                valid_completed_pose_result(
+                    result,
+                    row,
+                    pose_index=0,
+                    render_path=render_path,
+                    fine_tune_steps=3_000,
+                    save_pose_models=False,
+                )
             )
 
 

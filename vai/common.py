@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -94,11 +96,27 @@ def output_name_for_pose(image_name: str, output_extension: str) -> str:
 
 
 def save_json(path: str | Path, payload: dict[str, Any]) -> None:
-    """Ghi JSON UTF-8 voi thu muc cha duoc tao san."""
+    """Ghi JSON nguyen tu de khong hong file neu tien trinh bi ngat."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=".{}.".format(path.name),
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 def load_vai_metadata(scene_path: str | Path) -> dict[str, Any]:

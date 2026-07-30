@@ -90,6 +90,16 @@ def build_parser() -> tuple[
         const=True,
         type=parse_bool_arg,
     )
+    parser.add_argument(
+        "--resume",
+        default=False,
+        nargs="?",
+        const=True,
+        type=parse_bool_arg,
+        help=(
+            "Giu PNG/manifest da hoan tat va bo qua cac pose hop le khi chay lai."
+        ),
+    )
     parser.add_argument("--psnr_max", default=40.0, type=float)
     parser.add_argument(
         "--lpips_net",

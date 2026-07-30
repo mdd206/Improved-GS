@@ -549,6 +549,7 @@ class ImageProcessingTests(unittest.TestCase):
             with PilImage.open(output_path) as saved_image:
                 self.assertEqual(saved_image.format, "JPEG")
                 self.assertEqual(JpegImagePlugin.get_sampling(saved_image), 2)
+            self.assertFalse(any(Path(temp_dir).glob("*.tmp")))
 
     def test_png_is_saved_losslessly(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -563,6 +564,7 @@ class ImageProcessingTests(unittest.TestCase):
             )
             image = pixels / 255.0
             save_render_image(image, output_path)
+            self.assertFalse(any(Path(temp_dir).glob("*.tmp")))
             with PilImage.open(output_path) as saved_image:
                 self.assertEqual(saved_image.format, "PNG")
                 saved = np.asarray(saved_image)

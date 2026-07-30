@@ -1,7 +1,10 @@
 """Hau xu ly va luu anh render VAI."""
 from __future__ import annotations
 
+import io
 import math
+import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -50,7 +53,7 @@ def save_render_image(
     jpeg_quality: int = 95,
     jpeg_subsampling: int = 2,
 ) -> None:
-    """Luu JPEG voi quality/subsampling ro rang hoac PNG lossless."""
+    """Luu anh nguyen tu de tranh PNG/JPEG do dang khi kernel bi ngat."""
     if not 1 <= int(jpeg_quality) <= 100:
         raise ValueError("jpeg_quality phai nam trong [1, 100]")
     if int(jpeg_subsampling) not in {0, 1, 2}:
@@ -68,12 +71,31 @@ def save_render_image(
         .numpy()
     )
     pil_image = Image.fromarray(np.ascontiguousarray(rgb), mode="RGB")
+    encoded = io.BytesIO()
     if output_path.suffix.lower() in {".jpg", ".jpeg"}:
         pil_image.save(
-            output_path,
+            encoded,
             format="JPEG",
             quality=int(jpeg_quality),
             subsampling=int(jpeg_subsampling),
         )
     else:
-        pil_image.save(output_path, format="PNG")
+        pil_image.save(encoded, format="PNG")
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=output_path.parent,
+            prefix=".{}.".format(output_path.name),
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(encoded.getvalue())
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, output_path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()

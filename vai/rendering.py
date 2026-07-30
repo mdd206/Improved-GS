@@ -123,11 +123,18 @@ def camera_from_pose_row(row: dict[str, str], camera: dict[str, Any]) -> MiniCam
     return result
 
 
-def _prepare_scene_output(output_root: Path, scene_name: str, overwrite: bool) -> Path:
+def _prepare_scene_output(
+    output_root: Path,
+    scene_name: str,
+    overwrite: bool,
+    preserve_existing: bool = False,
+) -> Path:
     """Tao thu muc render scene va chi xoa dung scene khi duoc cho phep."""
     output_root.mkdir(parents=True, exist_ok=True)
     scene_output = output_root / scene_name
     if scene_output.exists():
+        if preserve_existing:
+            return scene_output
         if not overwrite:
             raise FileExistsError(
                 f"Thu muc render da ton tai: {scene_output}. Dung --overwrite de render lai."

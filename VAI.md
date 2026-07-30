@@ -272,10 +272,24 @@ SCENE_NAMES = ["HCM0421", "HCM0539"]      # nhieu scene
 SCENE_NAMES = []                            # tat ca scene
 BASE_MODEL_OVERRIDES = {}                   # dat khi mot scene co nhieu model 30k
 BUDGET_OVERRIDES = {"HCM0421": 5_500_000}  # tuy chon
+RESUME_COMPLETED_POSES = True               # giu ket qua neu job bi ngat
 ```
 
 Moi scene tu tim model `iteration_30000`, chay doc lap tat ca test pose voi
 `pose_count=-1`, render truc tiep PNG, bo qua evaluation vi private khong co
 ground truth, roi validate ten/kich thuoc va tao mot ZIP co cau truc
 `scene/image.png`. Fine-tune van load lai PLY 30k cho tung pose, chi dung top-25,
-tat C2F/pose-aware trong local stage va khong luu PLY 33k mac dinh.
+tat C2F/pose-aware trong local stage va khong luu PLY 33k mac dinh. Log hien
+`pose hien tai/tong so pose`; PNG duoc ghi nguyen tu ngay sau khi pose do
+fine-tune xong. Hai file tien do duoc cap nhat sau tung pose:
+
+```text
+/kaggle/working/vai_phase2_pose_models/<scene>/finetune_progress.json
+/kaggle/working/vai_phase2_pose_png/<scene>_finetune_progress.json
+```
+
+File tien do ghi pose dang chay, stage `loading_base_model`, `fine_tuning` hay
+`rendering_png`, danh sach pose da xong va duong dan PNG. Khi chay lai cell voi
+`RESUME_COMPLETED_POSES=True`, pipeline chi bo qua pose co manifest dung cau
+hinh, du 3.000 optimizer update va PNG doc duoc dung kich thuoc. Pose dang do
+se duoc chay lai tu model 30k.

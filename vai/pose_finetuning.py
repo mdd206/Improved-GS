@@ -48,6 +48,12 @@ from vai.common import (
 )
 from vai.distortion import redistort_and_crop
 from vai.evaluation import evaluate_rendered_scene
+from vai.finetune_progress import (
+    load_json_object,
+    save_progress,
+    valid_completed_pose_result,
+    validate_resume_manifest,
+)
 from vai.image_processing import save_render_image, sharpen_image
 from vai.rendering import (
     _original_radial_camera,
@@ -110,6 +116,7 @@ def _prepare_model_output_root(
     base_model_path: Path,
     source_path: Path,
     overwrite: bool,
+    preserve_existing: bool = False,
 ) -> None:
     """Create a clean output root without ever touching the source model."""
     resolved_output = output_root.resolve()
@@ -119,6 +126,8 @@ def _prepare_model_output_root(
             "Fine-tune output path is not a directory: {}".format(output_root)
         )
     if output_root.exists() and any(output_root.iterdir()):
+        if preserve_existing:
+            return
         if not overwrite:
             raise FileExistsError(
                 "Fine-tune output already exists: {}. Use --overwrite true "
@@ -249,6 +258,7 @@ def _run_local_finetune(
     fine_tune_steps: int,
     progress_bar_width: int,
     empty_cache_interval: int,
+    progress_description: str,
 ) -> tuple[float, int]:
     """Run exactly `fine_tune_steps` optimizer updates on the selected pool."""
     gaussians.training_setup(context.opt)
@@ -257,7 +267,7 @@ def _run_local_finetune(
     ema_loss = 0.0
     progress_bar = tqdm(
         total=int(fine_tune_steps),
-        desc="Pose fine-tune",
+        desc=progress_description,
         ncols=int(progress_bar_width),
         dynamic_ncols=False,
     )
@@ -346,6 +356,7 @@ def run_test_pose_finetuning(
     top_k = int(runtime_args.top_k)
     sigma_multiplier = float(runtime_args.sigma_multiplier)
     save_pose_models = bool(runtime_args.save_pose_models)
+    resume_enabled = bool(getattr(runtime_args, "resume", False))
     validate_finetune_schedule(
         fine_tune_steps,
         split_from_step,
@@ -375,6 +386,7 @@ def run_test_pose_finetuning(
         base_model_path,
         source_path,
         bool(runtime_args.overwrite),
+        preserve_existing=resume_enabled,
     )
 
     metadata = load_vai_metadata(source_path)
@@ -425,12 +437,14 @@ def run_test_pose_finetuning(
         render_root,
         scene_name,
         bool(runtime_args.overwrite),
+        preserve_existing=resume_enabled,
     )
     scene_png_path = (
         _prepare_scene_output(
             png_root,
             scene_name,
             bool(runtime_args.overwrite),
+            preserve_existing=resume_enabled,
         )
         if bool(runtime_args.save_png)
         else None
@@ -475,15 +489,114 @@ def run_test_pose_finetuning(
         "pose_indices": list(range(pose_start_index, pose_end_index)),
         "render_dir": str(scene_render_path),
         "output_extension": str(runtime_args.output_extension),
+        "resume_enabled": resume_enabled,
+        "progress_file": str(
+            render_root / "{}_finetune_progress.json".format(scene_name)
+        ),
         "poses": [],
     }
-    save_json(output_root / "test_pose_finetune_manifest.json", manifest)
+    manifest_path = output_root / "test_pose_finetune_manifest.json"
+    progress_paths = [
+        output_root / "finetune_progress.json",
+        render_root / "{}_finetune_progress.json".format(scene_name),
+    ]
+
+    # Khi resume, chi tin pose co manifest hop le va file anh doc duoc.
+    if resume_enabled and manifest_path.is_file():
+        previous_manifest = load_json_object(manifest_path)
+        validate_resume_manifest(previous_manifest, manifest)
+        previous_by_index = {
+            int(pose_result["pose_index"]): pose_result
+            for pose_result in previous_manifest.get("poses", [])
+            if isinstance(pose_result, dict) and "pose_index" in pose_result
+        }
+        resumed_results = []
+        for batch_pose_index, row in enumerate(pose_rows):
+            pose_index = pose_start_index + batch_pose_index
+            previous_result = previous_by_index.get(pose_index)
+            if previous_result is None:
+                continue
+            render_name = output_name_for_pose(
+                row["image_name"],
+                str(runtime_args.output_extension),
+            )
+            if valid_completed_pose_result(
+                previous_result,
+                row,
+                pose_index,
+                scene_render_path / render_name,
+                fine_tune_steps,
+                save_pose_models,
+            ):
+                resumed_results.append(previous_result)
+        manifest["poses"] = sorted(
+            resumed_results,
+            key=lambda item: int(item["pose_index"]),
+        )
+
+    manifest["completed_pose_count"] = len(manifest["poses"])
+    manifest["total_training_seconds"] = float(
+        sum(float(pose["training_seconds"]) for pose in manifest["poses"])
+    )
+    save_json(manifest_path, manifest)
+    save_progress(progress_paths, manifest, "running")
+    completed_pose_indices = {
+        int(pose["pose_index"]) for pose in manifest["poses"]
+    }
+    if completed_pose_indices:
+        print(
+            "[{}] Resume: da co {}/{} pose hop le, se bo qua: {}".format(
+                scene_name,
+                len(completed_pose_indices),
+                len(pose_rows),
+                sorted(index + 1 for index in completed_pose_indices),
+            ),
+            flush=True,
+        )
 
     camera_template: Scene | None = None
-    total_training_seconds = 0.0
+    total_training_seconds = float(manifest["total_training_seconds"])
     final_iteration = int(base_iteration + fine_tune_steps)
     for batch_pose_index, row in enumerate(pose_rows):
         pose_index = pose_start_index + batch_pose_index
+        pose_position = batch_pose_index + 1
+        if pose_index in completed_pose_indices:
+            print(
+                "[{}] Pose {}/{} (scene {}/{}): da co PNG hop le, bo qua.".format(
+                    scene_name,
+                    pose_position,
+                    len(pose_rows),
+                    pose_index + 1,
+                    len(all_pose_rows),
+                ),
+                flush=True,
+            )
+            continue
+
+        current_pose = {
+            "pose_index": pose_index,
+            "pose_number_in_scene": pose_index + 1,
+            "pose_number_in_run": pose_position,
+            "test_image_name": row["image_name"],
+            "stage": "loading_base_model",
+        }
+        save_progress(
+            progress_paths,
+            manifest,
+            "running",
+            current_pose,
+        )
+        print(
+            "\n[{}] Bat dau pose {}/{} (scene {}/{}): {}".format(
+                scene_name,
+                pose_position,
+                len(pose_rows),
+                pose_index + 1,
+                len(all_pose_rows),
+                row["image_name"],
+            ),
+            flush=True,
+        )
         pose_directory_name = pose_output_directory_name(
             pose_index,
             row["image_name"],
@@ -540,18 +653,28 @@ def run_test_pose_finetuning(
             **selection.to_dict(),
         }
         save_json(pose_model_path / "view_selection.json", selection_payload)
+        current_pose["stage"] = "fine_tuning"
+        current_pose["selected_top_k"] = len(selected_cameras)
+        save_progress(
+            progress_paths,
+            manifest,
+            "running",
+            current_pose,
+        )
         print(
-            "Pose {}/{} {}: selected {}/{} views, sigma={:.6f}, "
+            "[{}] Pose {}/{} {}: selected {}/{} views, sigma={:.6f}, "
             "score range [{:.6g}, {:.6g}]".format(
-                pose_index + 1,
-                len(all_pose_rows),
+                scene_name,
+                pose_position,
+                len(pose_rows),
                 row["image_name"],
                 len(selected_cameras),
                 len(all_train_cameras),
                 selection.sigma,
                 selection.views[-1].score,
                 selection.views[0].score,
-            )
+            ),
+            flush=True,
         )
 
         context = build_training_context(
@@ -573,6 +696,11 @@ def run_test_pose_finetuning(
             fine_tune_steps,
             int(runtime_args.progress_bar_width),
             int(runtime_args.empty_cache_interval),
+            "{} pose {}/{}".format(
+                scene_name,
+                pose_position,
+                len(pose_rows),
+            ),
         )
         total_training_seconds += training_seconds
         if save_pose_models:
@@ -584,6 +712,24 @@ def run_test_pose_finetuning(
             str(runtime_args.output_extension),
         )
         png_name = output_name_for_pose(row["image_name"], "png")
+        current_pose["stage"] = "rendering_png"
+        current_pose["training_seconds"] = float(training_seconds)
+        current_pose["optimizer_updates"] = int(optimizer_updates)
+        save_progress(
+            progress_paths,
+            manifest,
+            "running",
+            current_pose,
+        )
+        print(
+            "[{}] Fine-tune xong pose {}/{} trong {:.1f}s; dang render PNG...".format(
+                scene_name,
+                pose_position,
+                len(pose_rows),
+                training_seconds,
+            ),
+            flush=True,
+        )
         _render_target_pose(
             row=row,
             gaussians=gaussians,
@@ -626,9 +772,23 @@ def run_test_pose_finetuning(
             "selection": selection_payload,
         }
         manifest["poses"].append(pose_result)
+        manifest["poses"].sort(key=lambda item: int(item["pose_index"]))
         manifest["completed_pose_count"] = len(manifest["poses"])
         manifest["total_training_seconds"] = float(total_training_seconds)
-        save_json(output_root / "test_pose_finetune_manifest.json", manifest)
+        save_json(manifest_path, manifest)
+        completed_pose_indices.add(pose_index)
+        save_progress(progress_paths, manifest, "running")
+        print(
+            "[{}] Hoan tat pose {}/{} -> {} | tong da xong: {}/{}".format(
+                scene_name,
+                pose_position,
+                len(pose_rows),
+                scene_render_path / render_name,
+                len(completed_pose_indices),
+                len(pose_rows),
+            ),
+            flush=True,
+        )
 
         # Keep decoded camera images on CPU, but release every pose-specific
         # Gaussian model and optimizer before loading the immutable base PLY again.
@@ -660,5 +820,6 @@ def run_test_pose_finetuning(
             save_json(output_root / "vai_per_view.json", per_view)
             save_json(output_root / "result_test.json", {**summary, **manifest})
 
-    save_json(output_root / "test_pose_finetune_manifest.json", manifest)
+    save_json(manifest_path, manifest)
+    save_progress(progress_paths, manifest, "completed")
     return manifest
